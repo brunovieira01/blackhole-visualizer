@@ -1,0 +1,9 @@
+node_modules/
+dist/
+dist-electron/
+out/
+*.log
+npm-debug.log*
+.DS_Store
+Thumbs.db
+config.json

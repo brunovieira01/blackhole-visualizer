@@ -1,0 +1,21 @@
+{
+  "name": "blackhole-visualizer",
+  "version": "1.0.0",
+  "description": "A gravitationally-lensed black hole that reacts in real time to whatever your PC is playing. Runs as a live desktop wallpaper, a click-through overlay, or a plain window.",
+  "main": "main.js",
+  "author": "brunovieira01",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "wallpaper": "electron . --mode=wallpaper",
+    "overlay": "electron . --mode=overlay",
+    "window": "electron . --mode=window",
+    "shot": "electron . --mode=window --shot"
+  },
+  "devDependencies": {
+    "electron": "^43.2.0"
+  },
+  "optionalDependencies": {
+    "koffi": "^3.1.2"
+  }
+}

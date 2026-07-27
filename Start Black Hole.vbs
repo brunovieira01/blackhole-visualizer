@@ -1,5 +1,6 @@
-' Double-click launcher. Starts the visualiser with no console window at all —
+' Double-click launcher. Starts the visualiser with no console window at all:
 ' it just appears as your wallpaper, with a tray icon for the settings.
+' Keep this file pure ASCII - wscript reads it with the system ANSI codepage.
 Option Explicit
 
 Dim fso, sh, root, exe

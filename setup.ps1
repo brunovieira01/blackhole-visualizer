@@ -1,5 +1,9 @@
 # One-time setup: install dependencies, build the icons, and create shortcuts.
 #
+# NOTE: keep this file pure ASCII. Windows PowerShell 5.1 reads BOM-less files
+# as CP1252, where a UTF-8 em-dash decodes into a curly quote -- which PS
+# accepts as a string delimiter, so one stray dash breaks the whole parse.
+#
 #   powershell -ExecutionPolicy Bypass -File setup.ps1
 #   powershell -ExecutionPolicy Bypass -File setup.ps1 -Startup   # + run at login
 #
@@ -12,7 +16,7 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $MyInvocation.MyCommand.Definition
 Set-Location $root
 
-Write-Host "Black Hole Visualizer — setup" -ForegroundColor Yellow
+Write-Host "Black Hole Visualizer - setup" -ForegroundColor Yellow
 Write-Host "  $root`n"
 
 if (-not (Get-Command node -ErrorAction SilentlyContinue)) {

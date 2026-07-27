@@ -193,9 +193,9 @@ vec3 starLayer(vec3 d, float scale, float density, float bright, vec3 tint) {
         vec3 sp = o + h - f;
         float dist = length(sp);
         float core = exp(-dist * dist * 34.0);
-        // Twinkle: slow shimmer, sharpened by treble content
-        float tw = 0.72 + 0.28 * sin(uTime * (1.1 + h.x * 3.0) + h.y * TAU);
-        tw += uTreble * uReact * 0.55 * sin(uTime * 9.0 + h.y * 40.0);
+        // Slow, purely time-based shimmer. Driving this from the treble made
+        // the entire starfield flicker on every hi-hat.
+        float tw = 0.78 + 0.22 * sin(uTime * (1.1 + h.x * 3.0) + h.y * TAU);
         vec3 col = mix(vec3(1.0), tint, h.x * 0.75);
         col = mix(col, vec3(0.6, 0.75, 1.25), step(0.92, h.y)); // occasional blue giant
         acc += col * core * bright * max(tw, 0.0) * (0.35 + h.z);
@@ -214,7 +214,7 @@ vec3 background(vec3 d) {
   float n = fbm3(d * 2.1 + vec3(0.0, 0.0, uTime * 0.008), 5);
   n = pow(max(n - 0.35, 0.0) * 1.9, 2.1);
   float n2 = fbm3(d * 4.7 - vec3(uTime * 0.005), 4);
-  col += uNebula * n * (0.10 + 0.16 * uLevel * uReact);
+  col += uNebula * n * 0.16;   // constant: the background never reacts
   col += uNebula.bgr * n * n2 * 0.045;
 
   // Faint galactic band for depth
@@ -245,7 +245,9 @@ vec3 diskSample(vec3 hit, vec3 vel, out float alpha) {
   float spec = spectrum(pow(t, 0.65));
   float dens = env * (0.30 + 0.70 * turb);
   dens *= 1.0 + uReact * (1.7 * spec + 1.1 * uBass * exp(-t * 3.5));
-  dens *= 1.0 + uBeat * uReact * 0.7 * exp(-t * 2.0);
+  // A gentle swell on onsets, confined to the disk. Small on purpose: a
+  // full-disk flash on every beat is its own kind of strobing.
+  dens *= 1.0 + uBeat * uReact * 0.30 * exp(-t * 2.0);
 
   // Temperature: T ~ r^-3/4 -> white hot inside, ember red outside
   float temp = pow(clamp(1.0 - t, 0.0, 1.0), 1.35);
@@ -291,17 +293,18 @@ void main() {
 
   // --- camera ---------------------------------------------------------
   // Framed so the r=13 disk sits just inside the vertical field of view.
-  float dist  = 28.0 - 2.2 * uBass * uReact - 1.0 * uBeat * uReact;
-  float pitch = uDiskTilt + 0.055 * sin(uTime * 0.07);
+  //
+  // Deliberately rigid: no audio-driven dolly, no beat shake, no drift. The
+  // black hole is the fixed thing you look *at*; only the disk moves. Anything
+  // that displaces the whole frame in time with the music reads as the screen
+  // lurching, which is nauseating on a wallpaper you stare at all day.
+  const float dist = 28.0;
+  float pitch = uDiskTilt;
   vec3  ro = vec3(sin(uOrbit) * cos(pitch), sin(pitch), cos(uOrbit) * cos(pitch)) * dist;
 
   vec3 fwd   = normalize(-ro);
   vec3 right = normalize(cross(vec3(0.0, 1.0, 0.0), fwd));
   vec3 up    = cross(fwd, right);
-
-  // Subtle handheld drift + a kick on every beat
-  float shake = uBeat * uReact * 0.012;
-  uv += vec2(sin(uTime * 31.0), cos(uTime * 27.0)) * shake;
 
   vec3 vel = normalize(fwd * 1.05 + right * uv.x + up * uv.y);
   vec3 pos = ro;
@@ -358,9 +361,11 @@ void main() {
 
   // Photon ring: light that skimmed r = 1.5 r_s piles up into a thin halo.
   // Rays that fell straight in have minR ~ 1, so the shadow stays truly black.
+  // Held at a constant brightness — a black hole that throbs on every beat is
+  // exactly the kind of motion we're keeping out of the frame.
   float ringD = abs(minR - 1.5 * R_S);
   float ring  = exp(-ringD * ringD * 90.0);
-  col += uHot * ring * (0.22 + 0.40 * uTreble * uReact + 0.25 * uBeat * uReact);
+  col += uHot * ring * 0.30;
 
   fragColor = vec4(max(col, 0.0), 1.0);
 }`;
@@ -426,11 +431,12 @@ uniform sampler2D uBloom;
 uniform vec2  uRes;
 uniform float uTime;
 uniform float uBloomAmt;
-uniform float uLevel;
-uniform float uBeat;
-uniform float uReact;
 uniform float uGrain;
 uniform float uAlphaOut;   // 1 in overlay mode: punch out the dark areas
+
+// Note: nothing here reacts to the audio, by design. Every audio-driven term
+// in this pass moved the whole frame at once (bloom gain, chromatic
+// aberration) and that is what made the visualiser hard to look at.
 
 // ACES filmic tonemap (Narkowicz fit)
 vec3 aces(vec3 x) {
@@ -443,17 +449,20 @@ void main() {
   vec2 p  = (uv * 2.0 - 1.0);
   p.x *= uRes.x / uRes.y;
 
-  // Chromatic aberration grows towards the edges, pumped by the beat
-  // Kept low at rest — point stars split into coloured dots if it's too strong
-  float ca = (0.0005 + 0.0050 * uBeat * uReact) * dot(p, p) * 0.35;
+  // Chromatic aberration grows towards the edges. Constant, not beat-driven:
+  // shifting the whole frame's colour fringing in time with the music is a
+  // large part of what made this uncomfortable to look at. Kept low anyway —
+  // point stars split into coloured dots if it's too strong.
+  float ca = 0.0006 * dot(p, p) * 0.35;
   vec2  dir = normalize(uv - 0.5 + 1e-6);
   vec3 scene;
   scene.r = texture(uScene, uv + dir * ca).r;
   scene.g = texture(uScene, uv).g;
   scene.b = texture(uScene, uv - dir * ca).b;
 
+  // Bloom gain is constant too — pumping it made the entire screen breathe.
   vec3 bloom = texture(uBloom, uv).rgb;
-  vec3 col = scene + bloom * uBloomAmt * (1.0 + 0.5 * uLevel * uReact);
+  vec3 col = scene + bloom * uBloomAmt;
 
   // ---- grade ----------------------------------------------------------
   col = aces(col * 1.05);

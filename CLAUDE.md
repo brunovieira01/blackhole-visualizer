@@ -22,6 +22,22 @@ To verify **wallpaper** mode without disturbing the desktop, render the WorkerW 
 window offscreen with `PrintWindow(hwnd, dc, PW_RENDERFULLCONTENT)` — the host HWND is
 printed to stdout on attach.
 
+### Testing the media controls
+
+You need a live SMTC session, and you don't want to make noise on someone's machine.
+Play a **silent WAV** in a throwaway Electron window with `navigator.mediaSession`
+metadata and `setActionHandler` callbacks that log: Chromium registers a media session
+for any playing unmuted audio track without inspecting the samples, so you get a real
+session that is completely silent. Fire a command, then check the callback log — that
+proves the whole chain, not just that the call returned.
+
+To test the on-screen buttons, launch with `--remote-debugging-port=9222` and drive
+`Input.dispatchMouseEvent` over the DevTools protocol (Node has a global `WebSocket`).
+Use real coordinates from `getBoundingClientRect` so the click goes through CSS
+hit-testing — `element.click()` would pass even if `pointer-events` were wrong.
+`SendKeys` is unreliable here: Windows blocks a background process from stealing
+foreground, so the keystrokes land in whatever app is actually in front.
+
 ## Architecture
 
 | File | Role |
@@ -70,6 +86,19 @@ window flags like `transparent` and `focusable` can't be changed after creation.
 - **`nowplaying.ps1` needs Windows PowerShell 5.1**, not PowerShell 7 — it's the shell
   that projects the WinRT `Windows.Media.Control` types without extra tooling. `main.js`
   spawns `powershell.exe` explicitly for that reason; do not "modernise" it to `pwsh`.
+- **Never use `[Console]::In` for the command channel.** That reader is a
+  `SyncTextReader`, whose `ReadLineAsync()` is not asynchronous at all — it calls the
+  blocking `ReadLine()` and returns an already-completed task. Polling `.IsCompleted` on
+  it either blocks the whole loop forever (stdin open but idle) or reports instant EOF
+  (no stdin), and in both cases the watcher goes silent with no error. Use
+  `[Console]::OpenStandardInput()` wrapped in a plain `StreamReader`.
+- Orphan detection is the `-ParentPid` check, *not* stdin EOF — EOF just means nobody is
+  sending commands (e.g. when run by hand for debugging), which must stay supported.
+- **Motion policy:** the camera is fixed and nothing in the composite pass reacts to
+  audio. Camera dolly, beat shake, drift, bloom pumping, beat-driven chromatic
+  aberration and a pulsing photon ring were all removed because they move the *whole
+  frame* and made the visualiser nauseating to look at. Audio reactivity belongs in the
+  disk. Think hard before adding anything that displaces or flashes the full image.
 - The audio-session COM interfaces in that script rely on **vtable slot order**. The
   unused leading methods are declared purely to occupy their slots — deleting one
   silently shifts every call after it. `GetProcessId` returning sane pids is the canary.

@@ -10,9 +10,13 @@
 #       a random video player).
 #
 #  Emitted shapes:
-#    {"kind":"media","title":"...","artist":"...","app":"Spotify","status":"Playing"}
+#    {"kind":"media","title":"...","artist":"...","app":"Spotify","status":"Playing",
+#     "position":63.2,"duration":214.0,"canNext":true,...}
 #    {"kind":"app","app":"Valorant"}
 #    {"kind":"none"}
+#
+#  Commands are read from stdin, one per line, and applied to the current
+#  session: play / pause / playpause / next / prev / seek <seconds>
 #
 #  NOTE: keep this file pure ASCII. Windows PowerShell 5.1 reads BOM-less files
 #  as CP1252, where a UTF-8 em-dash decodes into a curly quote -- which PS
@@ -20,6 +24,7 @@
 # ---------------------------------------------------------------------------
 param(
   [int]$ExcludePid = 0,
+  [int]$ParentPid = 0,
   [int]$IntervalMs = 1000
 )
 
@@ -219,9 +224,86 @@ function Get-ProcessName([int]$procId) {
   }
 }
 
+# ---- transport commands ----------------------------------------------------
+function Invoke-MediaCommand([string]$line) {
+  if ([string]::IsNullOrWhiteSpace($line)) { return }
+  $parts = $line.Trim().Split(' ')
+  $cmd = $parts[0].ToLowerInvariant()
+
+  $m = Get-Manager
+  if ($null -eq $m) { return }
+  try {
+    $s = $m.GetCurrentSession()
+    if ($null -eq $s) { return }
+    switch ($cmd) {
+      'play'      { $null = Await ($s.TryPlayAsync()) ([bool]) }
+      'pause'     { $null = Await ($s.TryPauseAsync()) ([bool]) }
+      'playpause' { $null = Await ($s.TryTogglePlayPauseAsync()) ([bool]) }
+      'next'      { $null = Await ($s.TrySkipNextAsync()) ([bool]) }
+      'prev'      { $null = Await ($s.TrySkipPreviousAsync()) ([bool]) }
+      'seek' {
+        if ($parts.Count -gt 1) {
+          $secs = 0.0
+          if ([double]::TryParse($parts[1], [ref]$secs)) {
+            # TryChangePlaybackPositionAsync takes 100-nanosecond ticks
+            $null = Await ($s.TryChangePlaybackPositionAsync([long]($secs * 10000000))) ([bool])
+          }
+        }
+      }
+    }
+  } catch {
+    $script:mgr = $null
+  }
+}
+
 # ---- poll loop -------------------------------------------------------------
+# NOTE: do NOT use [Console]::In here. That reader is a SyncTextReader, whose
+# ReadLineAsync() is not actually asynchronous - it calls the blocking
+# ReadLine() and hands back an already-completed task. Polling .IsCompleted on
+# it either blocks the loop forever (stdin open, no data) or reports instant
+# EOF. The raw stdin stream wrapped in a plain StreamReader is genuinely async.
+$stdinReader = $null
+$stdinTask = $null
+try {
+  $stdinReader = New-Object System.IO.StreamReader([Console]::OpenStandardInput())
+  $stdinTask = $stdinReader.ReadLineAsync()
+} catch {
+  $stdinReader = $null                     # no stdin: run read-only
+}
+
 $last = ''
+$sincePoll = [int]$IntervalMs              # force an immediate first poll
+$SLICE = 40
+
 while ($true) {
+  # Commands are checked on a 40 ms slice so a button press feels instant,
+  # while the (much heavier) SMTC poll stays on its own slower cadence.
+  while ($null -ne $stdinTask -and $stdinTask.IsCompleted) {
+    $line = $null
+    try { $line = $stdinTask.Result } catch { }
+    if ($null -eq $line) {
+      # stdin closed. Keep reporting; orphan detection is the parent-pid check.
+      $stdinTask = $null
+      break
+    }
+    Invoke-MediaCommand $line
+    $stdinTask = $stdinReader.ReadLineAsync()
+    Start-Sleep -Milliseconds 220          # let the app act before we re-read
+    $sincePoll = [int]$IntervalMs
+  }
+
+  # Don't outlive the app that spawned us.
+  if ($ParentPid -gt 0 -and -not (Get-Process -Id $ParentPid -ErrorAction SilentlyContinue)) {
+    exit 0
+  }
+
+  if ($sincePoll -lt [int]$IntervalMs) {
+    Start-Sleep -Milliseconds $SLICE
+    $sincePoll += $SLICE
+    continue
+  }
+  $sincePoll = 0
+
   $state = [ordered]@{ kind = 'none'; title = ''; artist = ''; album = ''; app = ''; status = '' }
 
   # 1. media session
@@ -233,13 +315,39 @@ while ($true) {
       if ($null -ne $session) {
         $props = Await ($session.TryGetMediaPropertiesAsync()) $script:propType
         if ($null -ne $props) {
+          $info = $session.GetPlaybackInfo()
+          $ctrl = $info.Controls
+          $status = [string]$info.PlaybackStatus
+
+          # Timeline. Apps refresh Position only now and then, so advance it by
+          # however long ago the value was published; the UI interpolates from
+          # there. LastUpdatedTime is unset for some apps - ignore silly ages.
+          $pos = 0.0; $dur = 0.0
+          try {
+            $tl = $session.GetTimelineProperties()
+            $pos = $tl.Position.TotalSeconds
+            $dur = ($tl.EndTime - $tl.StartTime).TotalSeconds
+            if ($status -eq 'Playing') {
+              $age = ([DateTimeOffset]::Now - $tl.LastUpdatedTime).TotalSeconds
+              if ($age -gt 0 -and $age -lt 30) { $pos += $age }
+            }
+            if ($dur -gt 0) { $pos = [Math]::Min($pos, $dur) }
+          } catch { }
+
           $media = [ordered]@{
-            kind   = 'media'
-            title  = [string]$props.Title
-            artist = [string]$props.Artist
-            album  = [string]$props.AlbumTitle
-            app    = (Format-AppName ([string]$session.SourceAppUserModelId))
-            status = [string]$session.GetPlaybackInfo().PlaybackStatus
+            kind     = 'media'
+            title    = [string]$props.Title
+            artist   = [string]$props.Artist
+            album    = [string]$props.AlbumTitle
+            app      = (Format-AppName ([string]$session.SourceAppUserModelId))
+            status   = $status
+            position = [Math]::Round($pos, 2)
+            duration = [Math]::Round($dur, 2)
+            canPlay  = [bool]$ctrl.IsPlayEnabled
+            canPause = [bool]$ctrl.IsPauseEnabled
+            canNext  = [bool]$ctrl.IsNextEnabled
+            canPrev  = [bool]$ctrl.IsPreviousEnabled
+            canSeek  = [bool]$ctrl.IsPlaybackPositionEnabled
           }
         }
       }
@@ -253,6 +361,13 @@ while ($true) {
   $procId = [BHV.Sessions]::Loudest($ExcludePid, [ref]$peak)
   $appName = ''
   if ($procId -gt 0) { $appName = Get-ProcessName $procId }
+
+  # Some apps report a bare COM GUID instead of a real AUMID. A raw
+  # "{726E1262-...}" on screen is useless, so borrow the process name from the
+  # WASAPI side when that happens.
+  if ($null -ne $media -and $media.app -match '^\{?[0-9A-Fa-f]{8}-') {
+    $media.app = if ($appName) { $appName } else { '' }
+  }
 
   if ($null -ne $media -and $media.status -eq 'Playing' -and $media.title) {
     $state = $media
@@ -271,6 +386,4 @@ while ($true) {
     [Console]::Out.Flush()
     $last = $json
   }
-
-  Start-Sleep -Milliseconds $IntervalMs
 }

@@ -102,6 +102,93 @@ html, body {
   margin-top: clamp(7px, 0.55vw, 15px);
 }
 
+/* ---- progress ----------------------------------------------------------- */
+.np-progress {
+  display: flex;
+  align-items: center;
+  gap: clamp(8px, 0.6vw, 16px);
+  margin-top: clamp(9px, 0.7vw, 18px);
+  width: clamp(210px, 17vw, 440px);
+}
+
+.np-time {
+  font-size: clamp(9.5px, 0.56vw, 15px);
+  letter-spacing: 0.08em;
+  color: rgba(255, 245, 235, 0.5);
+  font-variant-numeric: tabular-nums;
+  min-width: 4ch;
+}
+
+.np-time:last-child { text-align: right; }
+
+.np-track {
+  position: relative;
+  flex: 1;
+  height: clamp(3px, 0.22vw, 6px);
+  border-radius: 999px;
+  background: rgba(255, 245, 235, 0.16);
+  overflow: hidden;
+}
+
+.np-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 0%;
+  border-radius: 999px;
+  background: rgba(var(--accent), 0.95);
+  box-shadow: 0 0 10px rgba(var(--accent), 0.55);
+}
+
+/* ---- transport ---------------------------------------------------------- */
+.np-transport {
+  display: flex;
+  align-items: center;
+  gap: clamp(10px, 0.85vw, 22px);
+  margin-top: clamp(10px, 0.8vw, 20px);
+}
+
+.np-transport button {
+  all: unset;
+  display: grid;
+  place-items: center;
+  width: clamp(26px, 1.9vw, 46px);
+  height: clamp(26px, 1.9vw, 46px);
+  border-radius: 50%;
+  color: rgba(255, 248, 240, 0.85);
+  transition: background 0.18s ease, color 0.18s ease, transform 0.12s ease;
+}
+
+.np-transport svg {
+  width: 58%;
+  height: 58%;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* The play/pause glyph is filled; the skip glyphs are outline + filled wedge */
+.np-transport button[data-cmd="prev"] svg path,
+.np-transport button[data-cmd="next"] svg path { fill: currentColor; }
+
+.np-transport button[disabled] { opacity: 0.28; }
+
+/* Only offer hover/press affordances where clicks can actually land. */
+body.can-click .np-transport button:not([disabled]):hover {
+  background: rgba(var(--accent), 0.20);
+  color: #fff;
+  cursor: pointer;
+}
+
+body.can-click .np-transport button:not([disabled]):active { transform: scale(0.9); }
+body.can-click .np-track { cursor: pointer; }
+body.can-click .np { pointer-events: auto; }
+
+/* In wallpaper mode the visualiser lives below the desktop icon layer and can
+   never receive a click, so the transport is hidden rather than shown dead. */
+body:not(.can-click) .np-transport { display: none; }
+
 /* ---- HUD ---------------------------------------------------------------- */
 .hud {
   position: fixed;

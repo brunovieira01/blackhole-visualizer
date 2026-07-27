@@ -27,7 +27,28 @@ const np = {
   artist: document.getElementById('np-artist'),
   app: document.getElementById('np-app'),
   bars: [...document.querySelectorAll('.np-meter i')],
+  progress: document.getElementById('np-progress'),
+  elapsed: document.getElementById('np-elapsed'),
+  total: document.getElementById('np-total'),
+  track: document.getElementById('np-track'),
+  fill: document.getElementById('np-fill'),
+  transport: document.getElementById('np-transport'),
+  ppIcon: document.getElementById('np-pp-icon'),
 };
+
+const ICON_PLAY = 'M8 5l11 7-11 7z';
+const ICON_PAUSE = 'M8 5v14M16 5v14';
+
+// Position is only refreshed about once a second, so we advance it locally
+// between updates and re-sync on every message.
+const clock = { base: 0, at: 0, duration: 0, playing: false };
+
+function fmtTime(s) {
+  if (!isFinite(s) || s < 0) s = 0;
+  const m = Math.floor(s / 60);
+  const sec = Math.floor(s % 60);
+  return `${m}:${String(sec).padStart(2, '0')}`;
+}
 
 const SOURCE_LABEL = {
   loopback: 'system audio (loopback)',
@@ -79,7 +100,9 @@ function renderNowPlaying() {
   np.root.classList.toggle('show', show);
   if (!show) return;
 
-  if (info.kind === 'app') {
+  const isMedia = info.kind !== 'app';
+
+  if (!isMedia) {
     // Something audible with no media metadata: name the app instead.
     np.kicker.textContent = 'audio from';
     np.title.textContent = info.app || 'unknown app';
@@ -94,6 +117,38 @@ function renderNowPlaying() {
   }
   np.artist.style.display = np.artist.textContent ? '' : 'none';
   np.app.style.display = np.app.textContent ? '' : 'none';
+
+  // ---- timeline ----
+  const dur = isMedia ? (info.duration || 0) : 0;
+  clock.duration = dur;
+  clock.base = isMedia ? (info.position || 0) : 0;
+  clock.at = performance.now();
+  clock.playing = info.status === 'Playing';
+  np.progress.style.display = dur > 0 ? '' : 'none';
+  if (dur > 0) {
+    np.total.textContent = fmtTime(dur);
+    tickProgress();
+  }
+
+  // ---- transport ----
+  np.transport.style.display = isMedia ? '' : 'none';
+  np.ppIcon.setAttribute('d', clock.playing ? ICON_PAUSE : ICON_PLAY);
+  const setEnabled = (cmd, on) => {
+    const b = np.transport.querySelector(`[data-cmd="${cmd}"]`);
+    if (b) b.disabled = !on;
+  };
+  setEnabled('prev', info.canPrev);
+  setEnabled('next', info.canNext);
+  setEnabled('playpause', info.canPlay || info.canPause);
+}
+
+function tickProgress() {
+  if (!(clock.duration > 0)) return;
+  const t = Math.min(
+    clock.duration,
+    clock.base + (clock.playing ? (performance.now() - clock.at) / 1000 : 0));
+  np.fill.style.width = ((t / clock.duration) * 100).toFixed(2) + '%';
+  np.elapsed.textContent = fmtTime(t);
 }
 
 // Theme colours are HDR (components above 1.0), so normalise against the
@@ -121,7 +176,7 @@ function applySettings(s) {
     reactivity: settings.reactivity ?? 1.0,
     warp: settings.warp ?? 1.0,
     grain: settings.grain ?? 0.012,
-    autoOrbit: settings.autoOrbit ?? 0.02,
+    autoOrbit: settings.autoOrbit ?? 0,
   });
 
   applyAccent(theme.hot);
@@ -176,6 +231,58 @@ function tuneQuality(dt) {
 }
 
 // ---------------------------------------------------------------------------
+//  Transport controls
+//
+//  Clicks only reach us in window and overlay mode. As the wallpaper we sit
+//  below Explorer's icon layer, which swallows every click on the desktop, so
+//  there the transport is hidden and the tray menu / global hotkeys drive
+//  playback instead.
+// ---------------------------------------------------------------------------
+function bindTransport() {
+  document.body.classList.add('can-click');
+
+  np.transport.addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-cmd]');
+    if (!btn || btn.disabled) return;
+    bridge?.media(btn.dataset.cmd);
+    // Flip the glyph immediately; the watcher confirms within a second.
+    if (btn.dataset.cmd === 'playpause') {
+      clock.playing = !clock.playing;
+      clock.base = clock.base + 0;
+      clock.at = performance.now();
+      np.ppIcon.setAttribute('d', clock.playing ? ICON_PAUSE : ICON_PLAY);
+    }
+  });
+
+  np.track.addEventListener('click', (e) => {
+    if (!(clock.duration > 0) || !nowPlaying?.canSeek) return;
+    const r = np.track.getBoundingClientRect();
+    const frac = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width));
+    const secs = frac * clock.duration;
+    bridge?.media(`seek ${secs.toFixed(2)}`);
+    clock.base = secs;
+    clock.at = performance.now();
+    tickProgress();
+  });
+}
+
+// Overlay mode is click-through so the desktop stays usable. Ask main for
+// clicks back only while the pointer is actually over the panel.
+function bindOverlayHover() {
+  let inside = false;
+  window.addEventListener('mousemove', (e) => {
+    const r = np.root.getBoundingClientRect();
+    const over = np.root.classList.contains('show') &&
+      e.clientX >= r.left && e.clientX <= r.right &&
+      e.clientY >= r.top && e.clientY <= r.bottom;
+    if (over !== inside) {
+      inside = over;
+      bridge?.setInteractive(over);
+    }
+  });
+}
+
+// ---------------------------------------------------------------------------
 //  Interaction (window mode only)
 // ---------------------------------------------------------------------------
 function bindInteraction() {
@@ -218,6 +325,18 @@ function bindInteraction() {
         at + (e.key === 'ArrowRight' ? 1 : -1)));
       bridge?.set('warp', WARP_STEPS[next]);
       toast('wave depth ' + WARP_LABELS[next]);
+    } else if (k === ',') {
+      bridge?.media('prev');
+      toast('previous track');
+    } else if (k === '.') {
+      bridge?.media('next');
+      toast('next track');
+    } else if (e.key === ' ') {
+      e.preventDefault();
+      bridge?.media('playpause');
+      clock.playing = !clock.playing;
+      clock.at = performance.now();
+      np.ppIcon.setAttribute('d', clock.playing ? ICON_PAUSE : ICON_PLAY);
     } else if (k === 'f') {
       bridge?.toggleFullscreen();
     } else if (e.key === 'ArrowUp') {
@@ -254,7 +373,11 @@ async function main() {
 
   if (mode === 'window') {
     bindInteraction();
+    bindTransport();
     showHud(true);
+  } else if (mode === 'overlay') {
+    bindTransport();
+    bindOverlayHover();
   }
 
   const src = await audio.start({ forceDemo: !!settings.forceDemo });
@@ -295,6 +418,7 @@ async function main() {
     meterAcc += dt;
     if (meterAcc >= 1 / 24 && np.bars.length) {
       meterAcc = 0;
+      tickProgress();
       const n = np.bars.length;
       const per = (a.spectrum.length / n) | 0;
       for (let i = 0; i < n; i++) {

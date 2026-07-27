@@ -8,6 +8,8 @@ contextBridge.exposeInMainWorld('bhv', {
   onSettings: (fn) => ipcRenderer.on('settings', (_e, s) => fn(s)),
   getNowPlaying: () => ipcRenderer.invoke('get-nowplaying'),
   onNowPlaying: (fn) => ipcRenderer.on('nowplaying', (_e, np) => fn(np)),
+  media: (cmd) => ipcRenderer.send('media', cmd),
+  setInteractive: (on) => ipcRenderer.send('interactive', on),
   reportSource: (src) => ipcRenderer.send('source', src),
   hide: () => ipcRenderer.send('hide'),
   toggleFullscreen: () => ipcRenderer.send('toggle-fullscreen'),

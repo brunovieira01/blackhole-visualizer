@@ -118,7 +118,7 @@ export class BlackHoleRenderer {
     this.reactivity = 1.0;
     this.warp = 1.0;
     this.diskTilt = 0.155;
-    this.autoOrbit = 0.02;
+    this.autoOrbit = 0;
     this.alphaOut = 0;
     this.theme = {
       hot: [1.0, 0.62, 0.22],
@@ -196,9 +196,10 @@ export class BlackHoleRenderer {
     this.rtBloomA.resize(bw, bh);
     this.rtBloomB.resize(bw, bh);
 
-    // Disk rotation accelerates with the music; camera drifts slowly.
-    this.spin += dt * (0.30 + 0.85 * audio.level * this.reactivity + 0.5 * audio.beat);
-    this.orbit += dt * this.autoOrbit;
+    // The disk turns a little faster when the music is busy. No beat term —
+    // that produced a visible lurch in the rotation on every onset.
+    this.spin += dt * (0.30 + 0.28 * audio.level * this.reactivity);
+    this.orbit += dt * this.autoOrbit;   // 0 unless camera drift is enabled
 
     this._upload(this.texFFT, audio.spectrum);
     this._upload(this.texWave, audio.wave);
@@ -276,9 +277,6 @@ export class BlackHoleRenderer {
       gl.uniform2f(loc.uRes, W, H);
       gl.uniform1f(loc.uTime, time);
       gl.uniform1f(loc.uBloomAmt, this.bloom);
-      gl.uniform1f(loc.uLevel, audio.level);
-      gl.uniform1f(loc.uBeat, audio.beat);
-      gl.uniform1f(loc.uReact, this.reactivity);
       gl.uniform1f(loc.uGrain, this.grain);
       gl.uniform1f(loc.uAlphaOut, this.alphaOut);
       this._bindTex(0, this.rtScene.tex, loc.uScene);

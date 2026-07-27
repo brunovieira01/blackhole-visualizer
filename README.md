@@ -59,8 +59,48 @@ video player — it falls back to enumerating the **WASAPI render sessions** and
 process actually pushing audio, so you still get "Valorant" or "Discord" instead of a
 blank.
 
-Five small bars beside the title ride the live spectrum. Turn the whole thing off with
-`N` or from the tray.
+Five small bars beside the title ride the live spectrum, and there's a progress bar with
+elapsed / total time. Turn the whole thing off with `N` or from the tray.
+
+### Controls
+
+Play/pause, previous and next are wired straight through to the same media session, so
+they drive Spotify, YouTube, VLC — whatever currently holds it. Clicking the progress bar
+seeks, where the app supports it.
+
+**How you reach them depends on the mode**, and this is a hard constraint rather than a
+choice: as the wallpaper the visualiser lives *below* Explorer's desktop icon layer,
+which swallows every click on the desktop. Nothing drawn there can ever be clicked.
+
+| | Wallpaper | Overlay | Window |
+|---|---|---|---|
+| On-screen buttons | hidden (can't be clicked) | yes | yes |
+| Tray menu | yes | yes | yes |
+| Global hotkeys | yes | yes | yes |
+
+Global hotkeys, which work from anywhere regardless of mode:
+
+| | |
+|---|---|
+| `Ctrl` `Alt` `Space` | Play / pause |
+| `Ctrl` `Alt` `→` | Next track |
+| `Ctrl` `Alt` `←` | Previous track |
+
+In overlay mode the panel becomes clickable only while the pointer is actually over it —
+the rest of the screen stays click-through.
+
+---
+
+## Motion
+
+The camera does not move. No audio-driven dolly, no beat shake, no drift, and the frame
+as a whole never reacts — bloom gain, chromatic aberration, the photon ring and the
+starfield are all constant. Everything that displaces or flashes the whole image in time
+with the music reads as the screen lurching, which is genuinely unpleasant on something
+you have open all day.
+
+Only the **disk** moves. If you want the slow orbit back, there's a *Slow camera drift*
+checkbox in the tray.
 
 ---
 
@@ -130,10 +170,10 @@ The marcher tracks the signed distance to that moving surface rather than to `y 
 | Waveform | Azimuthal ripple running around the disk |
 | Log-spaced spectrum | Radial swell — bass heaves the inner disk, hats shiver the outer edge |
 | Surface slope | Sheen and crest/trough shading, which is what makes the wave readable edge-on |
-| Bass | Disk brightness, camera dolly |
+| Bass | Brightness of the inner disk |
 | Mids | Turbulence in the disk filaments |
-| Treble | Star twinkle, photon-ring sharpness |
-| Onsets | Camera kick, chromatic aberration, a pulse through the disk |
+| Level | How fast the disk turns |
+| Onsets | A gentle swell through the disk |
 
 The displacement is deliberately small. Viewed nearly edge-on a ray skims the disk and
 crosses a corrugated sheet many times, so large displacements smear the whole thing into
@@ -168,6 +208,8 @@ your GPU on a still image all day.
 | `1` – `6` | Theme |
 | `H` | Toggle HUD |
 | `N` | Toggle the now-playing panel |
+| `space` | Play / pause |
+| `,` `.` | Previous / next track |
 | `↑` `↓` | Reactivity |
 | `←` `→` | Wave depth (off → subtle → normal → strong → turbulent) |
 | `F` | Fullscreen |

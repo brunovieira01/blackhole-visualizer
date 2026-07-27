@@ -16,6 +16,31 @@
       <div class="np-kicker" id="np-kicker">now playing</div>
       <div class="np-title" id="np-title"></div>
       <div class="np-artist" id="np-artist"></div>
+
+      <div class="np-progress" id="np-progress">
+        <span class="np-time" id="np-elapsed">0:00</span>
+        <div class="np-track" id="np-track"><div class="np-fill" id="np-fill"></div></div>
+        <span class="np-time" id="np-total">0:00</span>
+      </div>
+
+      <div class="np-transport" id="np-transport">
+        <button type="button" data-cmd="prev" aria-label="Previous track">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M7 6v12M19 6l-9 6 9 6z" />
+          </svg>
+        </button>
+        <button type="button" data-cmd="playpause" id="np-pp" aria-label="Play or pause">
+          <svg viewBox="0 0 24 24" aria-hidden="true" id="np-pp-icon">
+            <path d="M8 5v14M16 5v14" />
+          </svg>
+        </button>
+        <button type="button" data-cmd="next" aria-label="Next track">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M17 6v12M5 6l9 6-9 6z" />
+          </svg>
+        </button>
+      </div>
+
       <div class="np-app" id="np-app"></div>
     </div>
   </div>
@@ -28,8 +53,9 @@
     <div class="hud-row"><span class="k">wave</span><span class="v" id="hud-warp">—</span></div>
     <div class="hud-row"><span class="k">fps</span><span class="v" id="hud-fps">—</span></div>
     <div class="hud-keys">
-      <b>H</b> hud &nbsp; <b>1–6</b> theme &nbsp; <b>N</b> now playing<br />
-      <b>↑↓</b> reactivity &nbsp; <b>←→</b> wave depth &nbsp; <b>drag</b> orbit &nbsp; <b>F</b> fullscreen
+      <b>H</b> hud &nbsp; <b>1–6</b> theme &nbsp; <b>N</b> now playing &nbsp; <b>F</b> fullscreen<br />
+      <b>↑↓</b> reactivity &nbsp; <b>←→</b> wave depth &nbsp; <b>drag</b> orbit<br />
+      <b>space</b> play/pause &nbsp; <b>,</b> prev &nbsp; <b>.</b> next
     </div>
   </div>
 

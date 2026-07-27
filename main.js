@@ -46,7 +46,7 @@ const DEFAULTS = {
   warp: 1.0,
   bloom: 0.75,
   grain: 0.012,
-  autoOrbit: 0.02,
+  autoOrbit: 0,          // camera is static by default; only the disk moves
   showNowPlaying: true,
   allMonitors: false,
   idleThrottle: true,
@@ -347,6 +347,27 @@ function buildTray() {
     { label: `  ${nowPlayingLabel()}`, enabled: false },
     { label: `  audio: ${audioSource}`, enabled: false },
     { type: 'separator' },
+    // Transport lives here because in wallpaper mode the visualiser is behind
+    // the desktop icon layer and can never receive a click.
+    {
+      label: 'Previous track',
+      accelerator: 'Ctrl+Alt+Left',
+      enabled: !!nowPlaying.canPrev,
+      click: () => mediaCommand('prev'),
+    },
+    {
+      label: nowPlaying.status === 'Playing' ? 'Pause' : 'Play',
+      accelerator: 'Ctrl+Alt+Space',
+      enabled: !!(nowPlaying.canPlay || nowPlaying.canPause),
+      click: () => mediaCommand('playpause'),
+    },
+    {
+      label: 'Next track',
+      accelerator: 'Ctrl+Alt+Right',
+      enabled: !!nowPlaying.canNext,
+      click: () => mediaCommand('next'),
+    },
+    { type: 'separator' },
     {
       label: 'Display mode',
       submenu: radio([
@@ -387,6 +408,12 @@ function buildTray() {
         [1.7, 'Strong'],
         [2.6, 'Turbulent'],
       ], config.warp, (v) => setConfig({ warp: v })),
+    },
+    {
+      label: 'Slow camera drift',
+      type: 'checkbox',
+      checked: config.autoOrbit > 0,
+      click: (i) => setConfig({ autoOrbit: i.checked ? 0.02 : 0 }),
     },
     { type: 'separator' },
     {
@@ -469,8 +496,9 @@ function startNowPlaying() {
       '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
       '-File', script,
       '-ExcludePid', String(process.pid),
+      '-ParentPid', String(process.pid),
       '-IntervalMs', '1000',
-    ], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    ], { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
   } catch (err) {
     console.error('[nowplaying] spawn failed:', err.message);
     return;
@@ -486,9 +514,15 @@ function startNowPlaying() {
       buf = buf.slice(nl + 1);
       if (!line) continue;
       try {
-        nowPlaying = JSON.parse(line);
+        const next = JSON.parse(line);
+        // The position field changes every second; only rebuild the tray when
+        // the *identity* of what's playing changes, or we'd churn the menu.
+        const key = (o) => `${o.kind}|${o.title}|${o.artist}|${o.app}|${o.status}` +
+          `|${o.canNext}|${o.canPrev}|${o.canPlay}|${o.canPause}`;
+        const changed = key(next) !== key(nowPlaying);
+        nowPlaying = next;
         win?.webContents.send('nowplaying', nowPlaying);
-        buildTray();
+        if (changed) buildTray();
       } catch {
         console.error('[nowplaying] unparseable line:', line.slice(0, 200));
       }
@@ -516,6 +550,19 @@ function stopNowPlaying() {
   }
 }
 
+// Send a transport command to the watcher: play | pause | playpause | next |
+// prev | seek <seconds>. Silently ignored if the watcher isn't up.
+function mediaCommand(cmd) {
+  if (!npProc || !npProc.stdin.writable) return false;
+  try {
+    npProc.stdin.write(cmd + '\n');
+    return true;
+  } catch (err) {
+    console.error('[nowplaying] command failed:', err.message);
+    return false;
+  }
+}
+
 // One-line summary for the tray tooltip / menu header.
 function nowPlayingLabel() {
   const np = nowPlaying;
@@ -534,6 +581,18 @@ function setupIpc() {
   ipcMain.handle('get-nowplaying', () => nowPlaying);
   ipcMain.handle('set', (_e, key, value) => {
     if (key in DEFAULTS) setConfig({ [key]: value });
+  });
+  ipcMain.on('media', (_e, cmd) => {
+    if (/^(play|pause|playpause|next|prev|seek(\s+\d+(\.\d+)?)?)$/.test(String(cmd))) {
+      mediaCommand(String(cmd));
+    }
+  });
+  // Overlay mode is click-through; the renderer asks for clicks back while the
+  // pointer is over the transport controls.
+  ipcMain.on('interactive', (_e, on) => {
+    if (currentMode === 'overlay' && win && !win.isDestroyed()) {
+      win.setIgnoreMouseEvents(!on, { forward: true });
+    }
   });
   ipcMain.on('source', (_e, src) => { audioSource = src; buildTray(); });
   ipcMain.on('hide', () => { if (currentMode === 'window') win?.hide(); });
@@ -587,6 +646,18 @@ if (!app.requestSingleInstanceLock()) {
       if (win.isVisible()) win.hide();
       else win.showInactive();
     });
+
+    // Transport hotkeys — the only way to drive playback while the visualiser
+    // is the wallpaper, since it sits below the desktop icon layer.
+    for (const [accel, cmd] of [
+      ['Control+Alt+Right', 'next'],
+      ['Control+Alt+Left', 'prev'],
+      ['Control+Alt+Space', 'playpause'],
+    ]) {
+      if (!globalShortcut.register(accel, () => mediaCommand(cmd))) {
+        console.warn(`[hotkey] ${accel} is already taken by another app`);
+      }
+    }
 
     screen.on('display-metrics-changed', refreshGeometry);
     screen.on('display-added', refreshGeometry);

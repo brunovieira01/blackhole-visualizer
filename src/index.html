@@ -10,15 +10,26 @@
 <body>
   <canvas id="gl"></canvas>
 
+  <div id="np" class="np">
+    <div class="np-meter"><i></i><i></i><i></i><i></i><i></i></div>
+    <div class="np-body">
+      <div class="np-kicker" id="np-kicker">now playing</div>
+      <div class="np-title" id="np-title"></div>
+      <div class="np-artist" id="np-artist"></div>
+      <div class="np-app" id="np-app"></div>
+    </div>
+  </div>
+
   <div id="hud" class="hud">
     <div class="hud-title">BLACK&nbsp;HOLE<span class="dim">&nbsp;/&nbsp;VISUALIZER</span></div>
     <div class="hud-row"><span class="k">source</span><span class="v" id="hud-source">starting…</span></div>
     <div class="hud-row"><span class="k">mode</span><span class="v" id="hud-mode">—</span></div>
     <div class="hud-row"><span class="k">theme</span><span class="v" id="hud-theme">—</span></div>
+    <div class="hud-row"><span class="k">wave</span><span class="v" id="hud-warp">—</span></div>
     <div class="hud-row"><span class="k">fps</span><span class="v" id="hud-fps">—</span></div>
     <div class="hud-keys">
-      <b>H</b> hud &nbsp; <b>1–6</b> theme &nbsp; <b>R</b> ring &nbsp; <b>W</b> wave<br />
-      <b>↑↓</b> reactivity &nbsp; <b>drag</b> orbit &nbsp; <b>F</b> fullscreen
+      <b>H</b> hud &nbsp; <b>1–6</b> theme &nbsp; <b>N</b> now playing<br />
+      <b>↑↓</b> reactivity &nbsp; <b>←→</b> wave depth &nbsp; <b>drag</b> orbit &nbsp; <b>F</b> fullscreen
     </div>
   </div>
 

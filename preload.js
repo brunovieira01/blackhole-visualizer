@@ -6,6 +6,8 @@ contextBridge.exposeInMainWorld('bhv', {
   getMode: () => ipcRenderer.invoke('get-mode'),
   set: (key, value) => ipcRenderer.invoke('set', key, value),
   onSettings: (fn) => ipcRenderer.on('settings', (_e, s) => fn(s)),
+  getNowPlaying: () => ipcRenderer.invoke('get-nowplaying'),
+  onNowPlaying: (fn) => ipcRenderer.on('nowplaying', (_e, np) => fn(np)),
   reportSource: (src) => ipcRenderer.send('source', src),
   hide: () => ipcRenderer.send('hide'),
   toggleFullscreen: () => ipcRenderer.send('toggle-fullscreen'),

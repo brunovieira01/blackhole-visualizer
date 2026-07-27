@@ -16,7 +16,17 @@ const els = {
   source: document.getElementById('hud-source'),
   mode: document.getElementById('hud-mode'),
   theme: document.getElementById('hud-theme'),
+  warp: document.getElementById('hud-warp'),
   fps: document.getElementById('hud-fps'),
+};
+
+const np = {
+  root: document.getElementById('np'),
+  kicker: document.getElementById('np-kicker'),
+  title: document.getElementById('np-title'),
+  artist: document.getElementById('np-artist'),
+  app: document.getElementById('np-app'),
+  bars: [...document.querySelectorAll('.np-meter i')],
 };
 
 const SOURCE_LABEL = {
@@ -33,12 +43,16 @@ const QUALITY_PRESETS = {
   ultra: { steps: 400, scale: 1.0 },
 };
 
+const WARP_STEPS = [0, 0.55, 1.0, 1.7, 2.6];
+const WARP_LABELS = ['off', 'subtle', 'normal', 'strong', 'turbulent'];
+
 let renderer;
 let audio;
 let settings = {};
 let mode = 'window';
 let toastTimer = null;
 let hudTimer = null;
+let nowPlaying = { kind: 'none' };
 
 function toast(msg) {
   if (document.body.classList.contains('passive')) return;
@@ -52,6 +66,42 @@ function showHud(temporarily) {
   hud.classList.remove('hidden');
   clearTimeout(hudTimer);
   if (temporarily) hudTimer = setTimeout(() => hud.classList.add('hidden'), 4200);
+}
+
+// ---------------------------------------------------------------------------
+//  Now playing
+// ---------------------------------------------------------------------------
+function renderNowPlaying() {
+  const info = nowPlaying || { kind: 'none' };
+  const show = (settings.showNowPlaying ?? true) && info.kind !== 'none';
+
+  document.body.classList.toggle('np-active', show);
+  np.root.classList.toggle('show', show);
+  if (!show) return;
+
+  if (info.kind === 'app') {
+    // Something audible with no media metadata: name the app instead.
+    np.kicker.textContent = 'audio from';
+    np.title.textContent = info.app || 'unknown app';
+    np.artist.textContent = '';
+    np.app.textContent = '';
+  } else {
+    const paused = info.status && info.status !== 'Playing';
+    np.kicker.textContent = paused ? 'paused' : 'now playing';
+    np.title.textContent = info.title || '';
+    np.artist.textContent = info.artist || '';
+    np.app.textContent = info.app || '';
+  }
+  np.artist.style.display = np.artist.textContent ? '' : 'none';
+  np.app.style.display = np.app.textContent ? '' : 'none';
+}
+
+// Theme colours are HDR (components above 1.0), so normalise against the
+// brightest channel before handing an rgb triplet to CSS.
+function applyAccent(hot) {
+  const m = Math.max(hot[0], hot[1], hot[2], 1e-6);
+  const rgb = hot.map((c) => Math.round(Math.min(255, 90 + (c / m) * 165)));
+  document.documentElement.style.setProperty('--accent', rgb.join(', '));
 }
 
 // ---------------------------------------------------------------------------
@@ -69,11 +119,13 @@ function applySettings(s) {
     renderScale: q.scale,
     bloom: settings.bloom ?? 1.0,
     reactivity: settings.reactivity ?? 1.0,
-    ring: settings.ring ?? true,
-    wave: settings.wave ?? true,
+    warp: settings.warp ?? 1.0,
     grain: settings.grain ?? 0.012,
     autoOrbit: settings.autoOrbit ?? 0.02,
   });
+
+  applyAccent(theme.hot);
+  renderNowPlaying();
 
   // Auto quality starts from "high" and adapts from there
   autoQuality.enabled = settings.quality === 'auto';
@@ -84,6 +136,8 @@ function applySettings(s) {
 
   els.theme.textContent = theme.label;
   els.mode.textContent = mode;
+  const wi = WARP_STEPS.indexOf(settings.warp ?? 1.0);
+  els.warp.textContent = wi >= 0 ? WARP_LABELS[wi] : String(settings.warp);
 }
 
 // ---------------------------------------------------------------------------
@@ -154,12 +208,16 @@ function bindInteraction() {
       if (id) { bridge?.set('theme', id); toast(THEMES[id].label); }
     } else if (k === 'h') {
       hud.classList.toggle('hidden');
-    } else if (k === 'r') {
-      bridge?.set('ring', !(settings.ring ?? true));
-      toast('spectrum ring ' + (settings.ring ? 'off' : 'on'));
-    } else if (k === 'w') {
-      bridge?.set('wave', !(settings.wave ?? true));
-      toast('waveform ' + (settings.wave ? 'off' : 'on'));
+    } else if (k === 'n') {
+      bridge?.set('showNowPlaying', !(settings.showNowPlaying ?? true));
+      toast('now playing ' + (settings.showNowPlaying ? 'off' : 'on'));
+    } else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+      const cur = WARP_STEPS.indexOf(settings.warp ?? 1.0);
+      const at = cur < 0 ? 2 : cur;
+      const next = Math.max(0, Math.min(WARP_STEPS.length - 1,
+        at + (e.key === 'ArrowRight' ? 1 : -1)));
+      bridge?.set('warp', WARP_STEPS[next]);
+      toast('wave depth ' + WARP_LABELS[next]);
     } else if (k === 'f') {
       bridge?.toggleFullscreen();
     } else if (e.key === 'ArrowUp') {
@@ -190,6 +248,10 @@ async function main() {
   applySettings((await bridge?.getSettings()) || {});
   bridge?.onSettings((s) => applySettings(s));
 
+  nowPlaying = (await bridge?.getNowPlaying()) || { kind: 'none' };
+  renderNowPlaying();
+  bridge?.onNowPlaying((info) => { nowPlaying = info; renderNowPlaying(); });
+
   if (mode === 'window') {
     bindInteraction();
     showHud(true);
@@ -208,6 +270,7 @@ async function main() {
   let fpsFrames = 0;
   let silence = 0;      // seconds since anything was audible
   let skipAcc = 0;
+  let meterAcc = 0;
 
   function frame(now) {
     const dt = Math.min(0.05, (now - last) / 1000);
@@ -227,6 +290,19 @@ async function main() {
 
     renderer.render(dt, time, a);
     tuneQuality(dt);
+
+    // Five little equaliser bars beside the track name, riding the spectrum.
+    meterAcc += dt;
+    if (meterAcc >= 1 / 24 && np.bars.length) {
+      meterAcc = 0;
+      const n = np.bars.length;
+      const per = (a.spectrum.length / n) | 0;
+      for (let i = 0; i < n; i++) {
+        let m = 0;
+        for (let j = i * per; j < (i + 1) * per; j++) if (a.spectrum[j] > m) m = a.spectrum[j];
+        np.bars[i].style.height = (12 + (m / 255) * 88).toFixed(1) + '%';
+      }
+    }
 
     fpsAcc += dt;
     fpsFrames++;

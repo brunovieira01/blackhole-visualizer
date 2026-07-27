@@ -20,6 +20,7 @@ const {
 } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
+const { spawn } = require('node:child_process');
 
 const wallpaper = require('./native/wallpaper');
 
@@ -42,11 +43,11 @@ const DEFAULTS = {
   theme: 'gargantua',
   quality: 'auto',
   reactivity: 1.0,
+  warp: 1.0,
   bloom: 0.75,
   grain: 0.012,
   autoOrbit: 0.02,
-  ring: true,
-  wave: true,
+  showNowPlaying: true,
   allMonitors: false,
   idleThrottle: true,
   launchAtLogin: false,
@@ -340,8 +341,10 @@ function buildTray() {
     ? 'Desktop  (fallback — not embedded)'
     : 'Desktop wallpaper';
 
+  tray.setToolTip('Black Hole Visualizer\n' + nowPlayingLabel());
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: `Black Hole Visualizer`, enabled: false },
+    { label: `  ${nowPlayingLabel()}`, enabled: false },
     { label: `  audio: ${audioSource}`, enabled: false },
     { type: 'separator' },
     {
@@ -375,18 +378,22 @@ function buildTray() {
         [2.3, 'Ridiculous'],
       ], config.reactivity, (v) => setConfig({ reactivity: v })),
     },
+    {
+      label: 'Wave depth',
+      submenu: radio([
+        [0.0, 'Off  (flat disk)'],
+        [0.55, 'Subtle'],
+        [1.0, 'Normal'],
+        [1.7, 'Strong'],
+        [2.6, 'Turbulent'],
+      ], config.warp, (v) => setConfig({ warp: v })),
+    },
     { type: 'separator' },
     {
-      label: 'Spectrum ring',
+      label: 'Show now playing',
       type: 'checkbox',
-      checked: config.ring,
-      click: (i) => setConfig({ ring: i.checked }),
-    },
-    {
-      label: 'Waveform circle',
-      type: 'checkbox',
-      checked: config.wave,
-      click: (i) => setConfig({ wave: i.checked }),
+      checked: config.showNowPlaying,
+      click: (i) => setConfig({ showNowPlaying: i.checked }),
     },
     {
       label: 'Span all monitors',
@@ -442,11 +449,89 @@ function setupCapture() {
 }
 
 // ---------------------------------------------------------------------------
+//  Now playing
+//
+//  A long-lived Windows PowerShell child polls the media session (SMTC) and
+//  the WASAPI render sessions, printing one JSON line whenever what's playing
+//  changes. PowerShell 5.1 specifically: it's the shell that can project the
+//  WinRT Windows.Media.Control types without extra tooling.
+// ---------------------------------------------------------------------------
+let npProc = null;
+let npRestartTimer = null;
+let nowPlaying = { kind: 'none' };
+
+function startNowPlaying() {
+  const script = path.join(__dirname, 'tools', 'nowplaying.ps1');
+  if (!fs.existsSync(script)) return;
+
+  try {
+    npProc = spawn('powershell.exe', [
+      '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
+      '-File', script,
+      '-ExcludePid', String(process.pid),
+      '-IntervalMs', '1000',
+    ], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+  } catch (err) {
+    console.error('[nowplaying] spawn failed:', err.message);
+    return;
+  }
+
+  let buf = '';
+  npProc.stdout.setEncoding('utf8');
+  npProc.stdout.on('data', (chunk) => {
+    buf += chunk;
+    let nl;
+    while ((nl = buf.indexOf('\n')) >= 0) {
+      const line = buf.slice(0, nl).trim();
+      buf = buf.slice(nl + 1);
+      if (!line) continue;
+      try {
+        nowPlaying = JSON.parse(line);
+        win?.webContents.send('nowplaying', nowPlaying);
+        buildTray();
+      } catch {
+        console.error('[nowplaying] unparseable line:', line.slice(0, 200));
+      }
+    }
+  });
+
+  npProc.stderr.setEncoding('utf8');
+  npProc.stderr.on('data', (d) => console.error('[nowplaying]', d.trim().slice(0, 400)));
+
+  npProc.on('exit', (code) => {
+    npProc = null;
+    if (quitting) return;
+    console.error('[nowplaying] watcher exited (code ' + code + '), retrying in 10s');
+    clearTimeout(npRestartTimer);
+    npRestartTimer = setTimeout(startNowPlaying, 10000);
+  });
+}
+
+function stopNowPlaying() {
+  clearTimeout(npRestartTimer);
+  if (npProc) {
+    npProc.removeAllListeners('exit');
+    npProc.kill();
+    npProc = null;
+  }
+}
+
+// One-line summary for the tray tooltip / menu header.
+function nowPlayingLabel() {
+  const np = nowPlaying;
+  if (!np || np.kind === 'none') return 'nothing playing';
+  if (np.kind === 'app') return np.app;
+  const who = np.artist ? `${np.title} - ${np.artist}` : np.title;
+  return np.status === 'Playing' ? who : `${who} (paused)`;
+}
+
+// ---------------------------------------------------------------------------
 //  IPC
 // ---------------------------------------------------------------------------
 function setupIpc() {
   ipcMain.handle('get-settings', () => ({ ...config, forceDemo }));
   ipcMain.handle('get-mode', () => currentMode);
+  ipcMain.handle('get-nowplaying', () => nowPlaying);
   ipcMain.handle('set', (_e, key, value) => {
     if (key in DEFAULTS) setConfig({ [key]: value });
   });
@@ -495,6 +580,7 @@ if (!app.requestSingleInstanceLock()) {
     setupIpc();
     createWindow(config.mode);
     buildTray();
+    startNowPlaying();
 
     globalShortcut.register('Control+Alt+B', () => {
       if (!win || win.isDestroyed()) return createWindow(config.mode);
@@ -512,6 +598,7 @@ if (!app.requestSingleInstanceLock()) {
   app.on('before-quit', () => { quitting = true; });
   app.on('will-quit', () => {
     globalShortcut.unregisterAll();
+    stopNowPlaying();
     if (win && !win.isDestroyed() && attachedToDesktop) wallpaper.detach(win);
   });
 }

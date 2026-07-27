@@ -116,8 +116,7 @@ export class BlackHoleRenderer {
     this.bloom = 1.0;
     this.grain = 0.012;
     this.reactivity = 1.0;
-    this.ring = true;
-    this.wave = true;
+    this.warp = 1.0;
     this.diskTilt = 0.155;
     this.autoOrbit = 0.02;
     this.alphaOut = 0;
@@ -154,8 +153,7 @@ export class BlackHoleRenderer {
     if (typeof s.renderScale === 'number') this.renderScale = s.renderScale;
     if (typeof s.bloom === 'number') this.bloom = s.bloom;
     if (typeof s.reactivity === 'number') this.reactivity = s.reactivity;
-    if (typeof s.ring === 'boolean') this.ring = s.ring;
-    if (typeof s.wave === 'boolean') this.wave = s.wave;
+    if (typeof s.warp === 'number') this.warp = s.warp;
     if (typeof s.grain === 'number') this.grain = s.grain;
     if (typeof s.autoOrbit === 'number') this.autoOrbit = s.autoOrbit;
     if (typeof s.diskTilt === 'number') this.diskTilt = s.diskTilt;
@@ -229,10 +227,12 @@ export class BlackHoleRenderer {
       gl.uniform1f(loc.uBeat, audio.beat);
       gl.uniform1f(loc.uReact, this.reactivity);
       gl.uniform1f(loc.uDiskTilt, this.diskTilt);
+      gl.uniform1f(loc.uWarp, this.warp);
       gl.uniform3fv(loc.uHot, t.hot);
       gl.uniform3fv(loc.uCool, t.cool);
       gl.uniform3fv(loc.uNebula, t.nebula);
       this._bindTex(0, this.texFFT.tex, loc.uFFT);
+      this._bindTex(1, this.texWave.tex, loc.uWave);
       this._draw();
     }
 
@@ -276,21 +276,13 @@ export class BlackHoleRenderer {
       gl.uniform2f(loc.uRes, W, H);
       gl.uniform1f(loc.uTime, time);
       gl.uniform1f(loc.uBloomAmt, this.bloom);
-      gl.uniform1f(loc.uBass, audio.bass);
-      gl.uniform1f(loc.uTreble, audio.treble);
       gl.uniform1f(loc.uLevel, audio.level);
       gl.uniform1f(loc.uBeat, audio.beat);
       gl.uniform1f(loc.uReact, this.reactivity);
-      gl.uniform1f(loc.uRingOn, this.ring ? 1 : 0);
-      gl.uniform1f(loc.uWaveOn, this.wave ? 1 : 0);
       gl.uniform1f(loc.uGrain, this.grain);
       gl.uniform1f(loc.uAlphaOut, this.alphaOut);
-      gl.uniform3fv(loc.uHot, t.hot);
-      gl.uniform3fv(loc.uCool, t.cool);
       this._bindTex(0, this.rtScene.tex, loc.uScene);
       this._bindTex(1, this.rtBloomA.tex, loc.uBloom);
-      this._bindTex(2, this.texFFT.tex, loc.uFFT);
-      this._bindTex(3, this.texWave.tex, loc.uWave);
       this._draw();
     }
   }

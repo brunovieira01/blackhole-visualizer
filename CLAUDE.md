@@ -31,10 +31,12 @@ printed to stdout on attach.
 | `native/wallpaper.js` | `SetParent` into Explorer's WorkerW via koffi |
 | `src/shaders.js` | All GLSL (scene, brightpass, blur, composite) |
 | `src/renderer.js` | WebGL2 pipeline, render targets, uniforms |
-| `src/audio.js` | Capture chain, log spectrum, band split, beat detection |
-| `src/app.js` | Bootstrap, adaptive quality, keyboard/pointer |
+| `src/audio.js` | Capture chain, per-bin normalisation, onset detection |
+| `src/app.js` | Bootstrap, adaptive quality, now-playing panel, keyboard/pointer |
 | `src/themes.js` | Colour presets (also mirrored as labels in `main.js`) |
+| `tools/nowplaying.ps1` | SMTC + WASAPI watcher, spawned as a child of main |
 | `tools/make-icon.js` | Generates `assets/icon.png` + `icon.ico` (pure Node) |
+| `tools/test-analysis.mjs` | `npm test` — spectrum balance, run headless |
 
 Mode changes **recreate** the BrowserWindow (`createWindow`) rather than mutating it —
 window flags like `transparent` and `focusable` can't be changed after creation.
@@ -60,6 +62,24 @@ window flags like `transparent` and `focusable` can't be changed after creation.
 - Shader uniform locations are cached by name at link time in `program()`; a uniform the
   compiler optimises away is simply absent from `loc`, and `gl.uniform*` with `undefined`
   is a silent no-op. Check there for "my uniform does nothing" bugs.
+- **The disk warp amplitude is small on purpose.** Nearly edge-on, a ray skims the disk
+  and crosses the corrugated sheet many times; raising the displacement smears it into a
+  fluffy blob and swallows the lensed arc. `diskHeight`'s `env` also holds the inner disk
+  rigid — that's where the photon ring and arc live. The wave is meant to read from the
+  slope shading in `diskSample`, not from the silhouette.
+- **`nowplaying.ps1` needs Windows PowerShell 5.1**, not PowerShell 7 — it's the shell
+  that projects the WinRT `Windows.Media.Control` types without extra tooling. `main.js`
+  spawns `powershell.exe` explicitly for that reason; do not "modernise" it to `pwsh`.
+- The audio-session COM interfaces in that script rely on **vtable slot order**. The
+  unused leading methods are declared purely to occupy their slots — deleting one
+  silently shifts every call after it. `GetProcessId` returning sane pids is the canary.
+- Don't trust `IsSystemSoundsSession()`; it returned S_OK for a normal process here.
+  Skip the system-sounds session by `pid == 0` instead.
+- **Any `.ps1` here must stay pure ASCII** — see the setup.ps1 note above; the same
+  CP1252 curly-quote trap applies.
+- `npm test` runs headless and needs no audio device: it stubs `AnalyserNode` and feeds
+  the real `AudioEngine` a synthetic spectrum. Run it after touching `src/audio.js` —
+  frequency balance is not something you can eyeball from a screenshot.
 
 ## Sync to Google Drive
 

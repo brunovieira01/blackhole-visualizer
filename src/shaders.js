@@ -114,6 +114,8 @@ uniform float     uSpin;      // accumulated disk rotation phase
 uniform float     uOrbit;     // camera azimuth
 uniform int       uSteps;     // integration steps (quality)
 uniform sampler2D uFFT;       // 256x1 log-spaced spectrum, R8
+uniform sampler2D uWave;      // 256x1 time-domain waveform, R8
+uniform float     uWarp;      // how hard the audio deforms the disk surface
 
 uniform float uBass;
 uniform float uMid;
@@ -134,6 +136,46 @@ const float R_FAR  = 60.0;    // escape radius
 
 float spectrum(float t) {
   return texture(uFFT, vec2(clamp(t, 0.0, 1.0), 0.5)).r;
+}
+
+// ---- the disk as a deformable sheet ---------------------------------------
+// The accretion disk isn't a flat plane any more: its height is driven by the
+// audio, so the whole sheet ripples with the music. The waveform wraps around
+// it azimuthally and the spectrum drives a swell travelling outward in radius.
+float diskHeight(vec2 p) {
+  float r = length(p);
+  if (r > R_OUT * 1.25) return 0.0;
+
+  float t = clamp((r - R_IN) / (R_OUT - R_IN), 0.0, 1.0);
+  // Held rigid across the inner disk and released further out. The inner rim
+  // is where the photon ring and the lensed arc are drawn, and rippling it
+  // costs far more in crispness than it buys in motion.
+  float env = smoothstep(0.08, 0.48, t) * (1.0 - smoothstep(0.62, 1.0, t));
+
+  float a = atan(p.y, p.x);
+  // Mirror the waveform (0..1..0) so it wraps seamlessly instead of tearing
+  // at +-pi, and drift it around with the disk's rotation.
+  float u = abs(fract((a + uSpin * 0.04) / TAU) * 2.0 - 1.0);
+  float w = texture(uWave, vec2(u, 0.5)).r * 2.0 - 1.0;
+
+  // Outward-travelling swell whose amplitude is the spectrum at this radius:
+  // bass heaves the inner disk, hats shiver the outer edge.
+  float s = spectrum(pow(t, 0.65));
+  float ripple = sin(r * 2.4 - uTime * 2.8) * s;
+
+  // Deliberately small. Viewed nearly edge-on, a ray skimming the disk crosses
+  // a corrugated sheet many times, and large displacements smear the whole
+  // thing into a fluffy blob that swallows the lensed arc. The wave is *read*
+  // from the slope shading in diskSample; the geometry only has to carry it.
+  return (w * 0.34 + ripple * 0.40) * env * uWarp;
+}
+
+// Signed distance to that sheet. Cheap early-outs keep the marcher fast: the
+// warp is bounded, so far above or below the plane the flat answer is exact.
+float diskDist(vec3 p) {
+  float reach = 0.80 * uWarp + 0.30;
+  if (abs(p.y) > reach) return p.y;
+  return p.y - diskHeight(p.xz);
 }
 
 // ---- background: stars + nebula, sampled by the *bent* ray direction ------
@@ -222,6 +264,24 @@ vec3 diskSample(vec3 hit, vec3 vel, out float alpha) {
   // Gravitational redshift towards the horizon
   col *= clamp(sqrt(1.0 - R_S / max(r, 1.05)), 0.25, 1.0);
 
+  // Sheen from the local slope of the warped sheet. Without this the ripples
+  // only read as a silhouette; shading them makes the wave visible across the
+  // whole face of the disk. Four extra height samples, but disk hits are rare
+  // (one to three per ray) so it's cheap where it counts.
+  if (uWarp > 0.01) {
+    const float e = 0.4;
+    float hx = diskHeight(hit.xz + vec2(e, 0.0)) - diskHeight(hit.xz - vec2(e, 0.0));
+    float hz = diskHeight(hit.xz + vec2(0.0, e)) - diskHeight(hit.xz - vec2(0.0, e));
+    vec3 nrm = normalize(vec3(-hx, 2.0 * e, -hz));
+    float sheen = pow(clamp(abs(dot(nrm, normalize(vel))), 0.0, 1.0), 1.4);
+    col *= 0.68 + 1.05 * sheen;
+
+    // Crests run hot, troughs fall dark. This is what actually sells the wave
+    // when the disk is nearly edge-on and the silhouette barely moves.
+    float crest = clamp(hit.y / (0.80 * uWarp + 0.08), -1.0, 1.0);
+    col *= 1.0 + crest * 0.42;
+  }
+
   alpha = clamp(dens * 0.95, 0.0, 1.0);
   return col * 0.55;
 }
@@ -254,6 +314,7 @@ void main() {
   float trans = 1.0;            // remaining transmittance
   float minR = 1e9;             // closest approach -> photon ring glow
   bool  captured = false;
+  float prevD = diskDist(pos);  // signed distance to the (warped) disk sheet
 
   for (int i = 0; i < 512; i++) {
     if (i >= uSteps) break;
@@ -266,19 +327,20 @@ void main() {
     if (trans < 0.004) break;
 
     // Adaptive step: coarse on the long approach, fine near the hole, and
-    // refined again whenever we're closing in on the equatorial plane.
+    // refined again whenever we're closing in on the disk surface.
     float dt = clamp(r * 0.075, 0.018, 0.9);
-    dt *= clamp(abs(pos.y) * 0.55 + 0.30, 0.30, 1.0);
+    dt *= clamp(abs(prevD) * 0.55 + 0.30, 0.30, 1.0);
 
     vec3 prev = pos;
     vec3 acc  = -1.5 * h2 * pos / pow(dot(pos, pos), 2.5);
     vel += acc * dt;
     pos += vel * dt;
 
-    // Did we cross the equatorial plane? (multiple crossings give the
-    // iconic arc of the far side of the disk lensed over the top)
-    if (prev.y * pos.y < 0.0) {
-      float f = prev.y / (prev.y - pos.y);
+    // Did we cross the disk? (multiple crossings give the iconic arc of the
+    // far side of the disk lensed up over the top and down under the bottom)
+    float curD = diskDist(pos);
+    if (prevD * curD < 0.0) {
+      float f = prevD / (prevD - curD);
       vec3 hit = mix(prev, pos, f);
       float rr = length(hit.xz);
       if (rr > R_IN && rr < R_OUT) {
@@ -288,6 +350,7 @@ void main() {
         trans *= 1.0 - a * 0.86;
       }
     }
+    prevD = curD;
   }
 
   // Background only reaches us if the photon escaped
@@ -347,7 +410,8 @@ void main() {
 }`;
 
 // ---------------------------------------------------------------------------
-//  Composite: tonemap + bloom + spectrum ring + waveform + grain + vignette
+//  Composite: bloom + ACES tonemap + vignette + grain
+//  (No overlay rings — all the audio reactivity lives in the disk itself.)
 // ---------------------------------------------------------------------------
 export const COMPOSITE_FRAG = `#version 300 es
 precision highp float;
@@ -358,25 +422,15 @@ out vec4 fragColor;
 
 uniform sampler2D uScene;
 uniform sampler2D uBloom;
-uniform sampler2D uFFT;
-uniform sampler2D uWave;
 
 uniform vec2  uRes;
 uniform float uTime;
 uniform float uBloomAmt;
-uniform float uBass;
-uniform float uTreble;
 uniform float uLevel;
 uniform float uBeat;
 uniform float uReact;
-uniform vec3  uHot;
-uniform vec3  uCool;
-uniform float uRingOn;
-uniform float uWaveOn;
 uniform float uGrain;
 uniform float uAlphaOut;   // 1 in overlay mode: punch out the dark areas
-
-const float BARS = 116.0;
 
 // ACES filmic tonemap (Narkowicz fit)
 vec3 aces(vec3 x) {
@@ -400,50 +454,6 @@ void main() {
 
   vec3 bloom = texture(uBloom, uv).rgb;
   vec3 col = scene + bloom * uBloomAmt * (1.0 + 0.5 * uLevel * uReact);
-
-  // ---- spectrum ring -------------------------------------------------
-  // Bass at 12 o'clock sweeping down to treble at 6 o'clock, mirrored across
-  // the vertical axis. Keeps the loud low end away from the disk's arms.
-  float r = length(p);
-  float t = atan(abs(p.x), p.y) / PI;
-
-  if (uRingOn > 0.5) {
-    float seg   = floor(t * BARS);
-    float local = fract(t * BARS);
-    float gap   = smoothstep(0.02, 0.30, local) * smoothstep(0.98, 0.70, local);
-
-    float mag = texture(uFFT, vec2((seg + 0.5) / BARS, 0.5)).r;
-    mag = pow(mag, 1.15);
-
-    float inR  = 0.66 + 0.030 * uBass * uReact;
-    float outR = inR + mag * (0.24 * uReact + 0.02);
-
-    float aa = 2.5 / uRes.y;
-    float band = smoothstep(inR - aa, inR + aa, r) * smoothstep(outR + aa, outR - aa, r);
-    vec3  bc = mix(uCool, uHot, clamp(mag * 1.4, 0.0, 1.0));
-    bc += vec3(1.0) * pow(mag, 3.0) * 0.6;
-    col += bc * band * gap * (0.55 + 1.1 * mag);
-
-    // Soft outward glow under each bar
-    float glow = exp(-pow(max(r - inR, 0.0) / max(outR - inR, 1e-3), 1.4) * 2.2)
-               * step(inR - 0.02, r);
-    col += bc * glow * gap * mag * 0.30;
-
-    // Base ring line — nearly invisible in silence, lights up with the music
-    float line = exp(-pow((r - inR) * 260.0, 2.0));
-    col += mix(uCool, uHot, 0.5) * line * (0.04 + 0.42 * uLevel * uReact);
-  }
-
-  // ---- waveform circle ------------------------------------------------
-  // Sits between the lensed disk and the spectrum ring so the three rings
-  // read as separate layers instead of fighting each other.
-  if (uWaveOn > 0.5) {
-    float w = texture(uWave, vec2(fract(t * 2.0 + uTime * 0.02), 0.5)).r * 2.0 - 1.0;
-    float wr = 0.50 + w * 0.060 * uReact;
-    float d  = abs(r - wr);
-    float line = exp(-d * d * 24000.0);
-    col += mix(uHot, vec3(1.0), 0.35) * line * (0.07 + 0.80 * uLevel * uReact);
-  }
 
   // ---- grade ----------------------------------------------------------
   col = aces(col * 1.05);

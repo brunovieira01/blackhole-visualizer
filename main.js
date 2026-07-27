@@ -38,7 +38,13 @@ const THEMES = {
   monochrome: 'Monochrome',
 };
 
+// Bump when a *default* changes in a way existing users should pick up, and
+// add a migration below. Without this, the first tray interaction freezes
+// every current value to disk and later default changes never reach anyone.
+const CONFIG_VERSION = 2;
+
 const DEFAULTS = {
+  configVersion: CONFIG_VERSION,
   mode: 'wallpaper',
   theme: 'gargantua',
   quality: 'auto',
@@ -46,7 +52,10 @@ const DEFAULTS = {
   warp: 1.0,
   bloom: 0.75,
   grain: 0.012,
-  autoOrbit: 0,          // camera is static by default; only the disk moves
+  // Slow ambient drift: camera orbit, a gentle tilt breath, and the starfield
+  // creeping. Never synced to audio, so it doesn't cause the lurching that
+  // beat-driven camera motion did. ~6 minutes for a full revolution.
+  autoOrbit: 0.018,
   showNowPlaying: true,
   allMonitors: false,
   idleThrottle: true,
@@ -82,6 +91,20 @@ function loadConfig() {
   }
   if (!MODES.includes(config.mode)) config.mode = DEFAULTS.mode;
   if (!THEMES[config.theme]) config.theme = DEFAULTS.theme;
+  migrateConfig();
+}
+
+function migrateConfig() {
+  const from = config.configVersion || 1;
+  if (from >= CONFIG_VERSION) return;
+
+  // v1 shipped with the camera completely locked while the audio-driven
+  // motion was being torn out. Ambient drift is a separate, slow thing and is
+  // on by default now, so adopt it for anyone still pinned at 0.
+  if (from < 2 && config.autoOrbit === 0) config.autoOrbit = DEFAULTS.autoOrbit;
+
+  config.configVersion = CONFIG_VERSION;
+  saveConfig();
 }
 
 function saveConfig() {
@@ -410,10 +433,13 @@ function buildTray() {
       ], config.warp, (v) => setConfig({ warp: v })),
     },
     {
-      label: 'Slow camera drift',
-      type: 'checkbox',
-      checked: config.autoOrbit > 0,
-      click: (i) => setConfig({ autoOrbit: i.checked ? 0.02 : 0 }),
+      label: 'Ambient drift',
+      submenu: radio([
+        [0, 'Off  (locked camera)'],
+        [0.010, 'Barely there'],
+        [0.018, 'Slow'],
+        [0.034, 'Wandering'],
+      ], config.autoOrbit, (v) => setConfig({ autoOrbit: v })),
     },
     { type: 'separator' },
     {

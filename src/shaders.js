@@ -128,6 +128,7 @@ uniform vec3  uHot;           // inner disk colour
 uniform vec3  uCool;          // outer disk colour
 uniform vec3  uNebula;        // background nebula tint
 uniform float uDiskTilt;
+uniform float uAmbient;       // 1 = slow drift enabled, 0 = locked off
 
 const float R_S    = 1.0;     // Schwarzschild radius
 const float R_IN   = 2.6;     // inner disk edge (just inside ISCO, looks better)
@@ -139,41 +140,66 @@ float spectrum(float t) {
 }
 
 // ---- the disk as a deformable sheet ---------------------------------------
-// The accretion disk isn't a flat plane any more: its height is driven by the
-// audio, so the whole sheet ripples with the music. The waveform wraps around
-// it azimuthally and the spectrum drives a swell travelling outward in radius.
+// The accretion disk isn't a flat plane: its height is driven by the audio, so
+// the whole sheet moves with the music.
+//
+// It is shaped as a sum of azimuthal vibration modes, like a drum head, rather
+// than by wrapping the raw waveform around the circle. That distinction is the
+// whole trick: an audio waveform is high spatial frequency, so wrapping it
+// produces fine corrugation that just reads as fuzz and forces the amplitude
+// down to stay legible. A handful of low-order modes gives big coherent lobes
+// you can actually follow, which means the amplitude can be much larger.
+//
+// Bands are separated by both mode number and radius, so different instruments
+// land in different places and stay tellable apart:
+//   bass   -> 2 and 3 lobes, inner disk   (kick, bassline: slow heaving)
+//   mid    -> 5 and 7 lobes, mid radii    (voice, melody: rolling undulation)
+//   treble -> 11 and 15 lobes, outer edge (hats, transients: fine shimmer)
 float diskHeight(vec2 p) {
   float r = length(p);
   if (r > R_OUT * 1.25) return 0.0;
 
   float t = clamp((r - R_IN) / (R_OUT - R_IN), 0.0, 1.0);
-  // Held rigid across the inner disk and released further out. The inner rim
-  // is where the photon ring and the lensed arc are drawn, and rippling it
-  // costs far more in crispness than it buys in motion.
-  float env = smoothstep(0.08, 0.48, t) * (1.0 - smoothstep(0.62, 1.0, t));
+  // Held rigid across the inner rim, where the photon ring and the lensed arc
+  // are drawn, and faded out before the outer edge.
+  float env = smoothstep(0.05, 0.40, t) * (1.0 - smoothstep(0.66, 1.0, t));
 
-  float a = atan(p.y, p.x);
-  // Mirror the waveform (0..1..0) so it wraps seamlessly instead of tearing
-  // at +-pi, and drift it around with the disk's rotation.
-  float u = abs(fract((a + uSpin * 0.04) / TAU) * 2.0 - 1.0);
-  float w = texture(uWave, vec2(u, 0.5)).r * 2.0 - 1.0;
+  float a = atan(p.y, p.x) + uSpin * 0.05;
 
-  // Outward-travelling swell whose amplitude is the spectrum at this radius:
-  // bass heaves the inner disk, hats shiver the outer edge.
+  // Radial homes for each band. Overlapping, so the disk still reads as one
+  // surface rather than three concentric zones.
+  float wLow  = 1.0 - smoothstep(0.10, 0.70, t);
+  float wMid  = exp(-pow((t - 0.45) / 0.32, 2.0));
+  float wHigh = smoothstep(0.30, 0.90, t);
+
+  // Modes drift at different rates so the pattern never looks like a frozen
+  // standing wave, and the phases are offset so they don't all peak together.
+  float h = 0.0;
+  h += wLow  * uBass   * (0.62 * sin(2.0  * a - uTime * 0.61)
+                        + 0.46 * sin(3.0  * a + uTime * 0.43 + 1.7));
+  h += wMid  * uMid    * (0.44 * sin(5.0  * a - uTime * 0.87 + 3.1)
+                        + 0.34 * sin(7.0  * a + uTime * 1.09 + 0.4));
+  h += wHigh * uTreble * (0.26 * sin(11.0 * a - uTime * 1.55 + 2.2)
+                        + 0.19 * sin(15.0 * a + uTime * 1.97 + 5.0));
+
+  // A swell running outward through the disk, amplitude taken from the
+  // spectrum at this radius. This is what carries the punch of a kick.
   float s = spectrum(pow(t, 0.65));
-  float ripple = sin(r * 2.4 - uTime * 2.8) * s;
+  h += 0.85 * s * sin(r * 1.7 - uTime * 2.6);
 
-  // Deliberately small. Viewed nearly edge-on, a ray skimming the disk crosses
-  // a corrugated sheet many times, and large displacements smear the whole
-  // thing into a fluffy blob that swallows the lensed arc. The wave is *read*
-  // from the slope shading in diskSample; the geometry only has to carry it.
-  return (w * 0.34 + ripple * 0.40) * env * uWarp;
+  // A little raw waveform on top for texture, kept small for the reason above.
+  float u = abs(fract(a / TAU) * 2.0 - 1.0);
+  h += 0.22 * (texture(uWave, vec2(u, 0.5)).r * 2.0 - 1.0);
+
+  return h * env * uWarp * 0.62;
 }
 
 // Signed distance to that sheet. Cheap early-outs keep the marcher fast: the
 // warp is bounded, so far above or below the plane the flat answer is exact.
 float diskDist(vec3 p) {
-  float reach = 0.80 * uWarp + 0.30;
+  // Must bound the largest height diskHeight can return, or rays would skip
+  // straight through the crests of a loud passage.
+  float reach = 1.9 * uWarp + 0.30;
   if (abs(p.y) > reach) return p.y;
   return p.y - diskHeight(p.xz);
 }
@@ -193,9 +219,9 @@ vec3 starLayer(vec3 d, float scale, float density, float bright, vec3 tint) {
         vec3 sp = o + h - f;
         float dist = length(sp);
         float core = exp(-dist * dist * 34.0);
-        // Slow, purely time-based shimmer. Driving this from the treble made
-        // the entire starfield flicker on every hi-hat.
-        float tw = 0.78 + 0.22 * sin(uTime * (1.1 + h.x * 3.0) + h.y * TAU);
+        // Lazy, purely time-based shimmer, each star on its own slow period.
+        // Driving this from the treble made the whole sky flicker on hi-hats.
+        float tw = 0.74 + 0.26 * sin(uTime * (0.22 + h.x * 0.55) + h.y * TAU);
         vec3 col = mix(vec3(1.0), tint, h.x * 0.75);
         col = mix(col, vec3(0.6, 0.75, 1.25), step(0.92, h.y)); // occasional blue giant
         acc += col * core * bright * max(tw, 0.0) * (0.35 + h.z);
@@ -207,15 +233,26 @@ vec3 starLayer(vec3 d, float scale, float density, float bright, vec3 tint) {
 
 vec3 background(vec3 d) {
   vec3 col = vec3(0.0);
-  col += starLayer(d,  90.0, 0.955, 1.00, vec3(1.0, 0.92, 0.80));
-  col += starLayer(d, 210.0, 0.972, 0.55, vec3(0.85, 0.90, 1.10));
 
-  // Nebula: low-frequency fbm, warped so lensing near the hole is obvious
-  float n = fbm3(d * 2.1 + vec3(0.0, 0.0, uTime * 0.008), 5);
+  // The two star layers creep at slightly different rates, which parallaxes
+  // them against each other and gives the sky a sense of depth and drift even
+  // when the camera is locked. Slow enough that you notice it only if you look.
+  vec3 dNear = d;
+  vec3 dFar  = d;
+  if (uAmbient > 0.5) {
+    dNear.xz = rot(uTime * 0.0045) * d.xz;
+    dFar.xz  = rot(uTime * 0.0026) * d.xz;
+  }
+  col += starLayer(dNear,  90.0, 0.955, 1.00, vec3(1.0, 0.92, 0.80));
+  col += starLayer(dFar,  210.0, 0.972, 0.55, vec3(0.85, 0.90, 1.10));
+
+  // Nebula: low-frequency fbm, warped so lensing near the hole is obvious.
+  // Two layers drifting in opposite directions so the cloud slowly churns.
+  float n = fbm3(d * 2.1 + vec3(uTime * 0.012, 0.0, uTime * 0.022), 5);
   n = pow(max(n - 0.35, 0.0) * 1.9, 2.1);
-  float n2 = fbm3(d * 4.7 - vec3(uTime * 0.005), 4);
-  col += uNebula * n * 0.16;   // constant: the background never reacts
-  col += uNebula.bgr * n * n2 * 0.045;
+  float n2 = fbm3(d * 4.7 - vec3(uTime * 0.017, uTime * 0.009, 0.0), 4);
+  col += uNebula * n * 0.16;   // brightness is constant: never audio-reactive
+  col += uNebula.bgr * n * n2 * 0.055;
 
   // Faint galactic band for depth
   float band = exp(-pow(d.y * 2.4, 2.0)) * 0.030;
@@ -244,7 +281,10 @@ vec3 diskSample(vec3 hit, vec3 vel, out float alpha) {
   // highs shimmer at the outer edge. This is what makes it "dance".
   float spec = spectrum(pow(t, 0.65));
   float dens = env * (0.30 + 0.70 * turb);
-  dens *= 1.0 + uReact * (1.7 * spec + 1.1 * uBass * exp(-t * 3.5));
+  // Eased back from the pre-warp values: with the larger displacement a ray
+  // crosses the sheet more often, and at the old gains loud passages saturated
+  // the disk to flat white and swallowed the filament detail.
+  dens *= 1.0 + uReact * (1.15 * spec + 0.75 * uBass * exp(-t * 3.5));
   // A gentle swell on onsets, confined to the disk. Small on purpose: a
   // full-disk flash on every beat is its own kind of strobing.
   dens *= 1.0 + uBeat * uReact * 0.30 * exp(-t * 2.0);
@@ -280,8 +320,8 @@ vec3 diskSample(vec3 hit, vec3 vel, out float alpha) {
 
     // Crests run hot, troughs fall dark. This is what actually sells the wave
     // when the disk is nearly edge-on and the silhouette barely moves.
-    float crest = clamp(hit.y / (0.80 * uWarp + 0.08), -1.0, 1.0);
-    col *= 1.0 + crest * 0.42;
+    float crest = clamp(hit.y / (0.95 * uWarp + 0.08), -1.0, 1.0);
+    col *= 1.0 + crest * 0.62;
   }
 
   alpha = clamp(dens * 0.95, 0.0, 1.0);
@@ -298,8 +338,12 @@ void main() {
   // black hole is the fixed thing you look *at*; only the disk moves. Anything
   // that displaces the whole frame in time with the music reads as the screen
   // lurching, which is nauseating on a wallpaper you stare at all day.
+  // Ambient motion is slow, continuous and completely independent of the
+  // audio. That's the distinction that matters: a camera creeping around over
+  // minutes reads as drifting through space, while anything synced to the beat
+  // reads as the screen lurching. uOrbit accumulates on the CPU side.
   const float dist = 28.0;
-  float pitch = uDiskTilt;
+  float pitch = uDiskTilt + uAmbient * 0.055 * sin(uTime * 0.043);
   vec3  ro = vec3(sin(uOrbit) * cos(pitch), sin(pitch), cos(uOrbit) * cos(pitch)) * dist;
 
   vec3 fwd   = normalize(-ro);

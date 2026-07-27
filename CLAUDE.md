@@ -94,11 +94,27 @@ window flags like `transparent` and `focusable` can't be changed after creation.
   `[Console]::OpenStandardInput()` wrapped in a plain `StreamReader`.
 - Orphan detection is the `-ParentPid` check, *not* stdin EOF — EOF just means nobody is
   sending commands (e.g. when run by hand for debugging), which must stay supported.
-- **Motion policy:** the camera is fixed and nothing in the composite pass reacts to
-  audio. Camera dolly, beat shake, drift, bloom pumping, beat-driven chromatic
-  aberration and a pulsing photon ring were all removed because they move the *whole
-  frame* and made the visualiser nauseating to look at. Audio reactivity belongs in the
-  disk. Think hard before adding anything that displaces or flashes the full image.
+- **Motion policy — the important one.** Two categories, kept strictly apart:
+  *ambient* motion (camera orbit, tilt breath, star parallax, nebula churn) is slow,
+  continuous and **never** derived from audio; *reactive* motion lives only in the disk.
+  Nothing in the composite pass reacts at all. Camera dolly, beat shake, bloom pumping,
+  beat-driven chromatic aberration, a pulsing photon ring and treble-driven star twinkle
+  were all removed — audio-synced whole-frame movement is what made this nauseating.
+  Before adding anything that displaces or flashes the full image in time with the music,
+  don't.
+- **`diskHeight` uses vibration modes, not the waveform.** Wrapping the raw waveform
+  around the disk was the original approach and it's a trap: audio waveforms are high
+  spatial frequency, so it corrugates rather than undulating, which caps the usable
+  amplitude at something too small to read. Low-order azimuthal modes (2/3 bass, 5/7 mid,
+  11/15 treble, each with its own radial window) give coherent lobes that carry several
+  times the displacement while staying legible. If asked for "more movement", raise the
+  mode amplitudes — do not raise the waveform term.
+- Raising the warp means more sheet crossings per ray, so disk *density* gains have to
+  come down with it or loud passages saturate to flat white. `diskDist`'s `reach` guard
+  must also bound the largest height `diskHeight` can return, or rays skip the crests.
+- Config defaults are versioned (`CONFIG_VERSION` + `migrateConfig`). The file is only
+  written on a tray interaction, so a user may have no config at all — but once written,
+  it freezes every value, and changing a default later needs a migration to reach them.
 - The audio-session COM interfaces in that script rely on **vtable slot order**. The
   unused leading methods are declared purely to occupy their slots — deleting one
   silently shifts every call after it. `GetProcessId` returning sane pids is the canary.

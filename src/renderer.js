@@ -229,6 +229,7 @@ export class BlackHoleRenderer {
       gl.uniform1f(loc.uReact, this.reactivity);
       gl.uniform1f(loc.uDiskTilt, this.diskTilt);
       gl.uniform1f(loc.uWarp, this.warp);
+      gl.uniform1f(loc.uAmbient, this.autoOrbit > 0 ? 1 : 0);
       gl.uniform3fv(loc.uHot, t.hot);
       gl.uniform3fv(loc.uCool, t.cool);
       gl.uniform3fv(loc.uNebula, t.nebula);

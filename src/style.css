@@ -20,8 +20,12 @@ html, body {
 }
 
 /* ---- now playing -------------------------------------------------------- */
-/* Sized in vw so it reads the same on a 1280px window and a 4K wallpaper. */
+/* Sized in vw so it reads the same on a 1280px window and a 4K wallpaper.
+   --np-scale then sizes the whole panel in one place; anchored top-left so
+   growing it pushes content right and down rather than moving the panel. */
 .np {
+  --np-scale: 1.3;
+  transform-origin: top left;
   position: fixed;
   top: clamp(26px, 2.2vw, 58px);
   left: clamp(30px, 2.5vw, 66px);
@@ -34,7 +38,7 @@ html, body {
   user-select: none;
   pointer-events: none;
   opacity: 0;
-  transform: translateX(-10px);
+  transform: translateX(-10px) scale(var(--np-scale));
   transition: opacity 0.55s ease, transform 0.55s ease;
   text-shadow: 0 2px 14px rgba(0, 0, 0, 0.95);
   max-width: min(46vw, 620px);
@@ -42,7 +46,7 @@ html, body {
 
 .np.show {
   opacity: 1;
-  transform: translateX(0);
+  transform: translateX(0) scale(var(--np-scale));
 }
 
 /* Five little bars that ride the actual band levels. */
@@ -192,7 +196,7 @@ body:not(.can-click) .np-transport { display: none; }
 /* ---- HUD ---------------------------------------------------------------- */
 .hud {
   position: fixed;
-  top: 168px;
+  top: 215px;   /* clears the now-playing panel above it */
   left: 24px;
   font: 11px/1.75 "Cascadia Mono", "Consolas", ui-monospace, monospace;
   letter-spacing: 0.09em;

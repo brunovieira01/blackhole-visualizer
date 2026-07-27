@@ -93,14 +93,20 @@ the rest of the screen stays click-through.
 
 ## Motion
 
-The camera does not move. No audio-driven dolly, no beat shake, no drift, and the frame
-as a whole never reacts — bloom gain, chromatic aberration, the photon ring and the
-starfield are all constant. Everything that displaces or flashes the whole image in time
-with the music reads as the screen lurching, which is genuinely unpleasant on something
-you have open all day.
+There are two kinds of movement here, and keeping them apart is the whole design.
 
-Only the **disk** moves. If you want the slow orbit back, there's a *Slow camera drift*
-checkbox in the tray.
+**Ambient drift** is slow, continuous and completely independent of the audio: the camera
+creeps around the hole (about six minutes for a lap), the tilt breathes, the two star
+layers parallax against each other, and the nebula churns. None of it is synced to
+anything, so it reads as drifting through space.
+
+**Audio reactivity** is confined to the disk. Nothing in the composite pass reacts at all.
+
+Every audio-driven term that moved the *whole frame* — a camera dolly on bass, a per-beat
+shake, chromatic aberration and bloom gain pumped by the music, a throbbing photon ring,
+a starfield that flickered on hi-hats — is gone. That combination is what made it
+nauseating; a fixed frame with a moving disk is not. Ambient drift is a *Slow / Barely
+there / Wandering / Off* dial in the tray.
 
 ---
 
@@ -161,25 +167,39 @@ gravitational redshift.
 
 Then the audio goes in — **into the disk itself**, not into overlay widgets. The
 accretion disk isn't a flat plane: its height is a function of the audio, so the whole
-sheet ripples. The waveform wraps around it azimuthally (mirrored, so it joins seamlessly
-instead of tearing at ±π) and the spectrum drives a swell travelling outward in radius.
-The marcher tracks the signed distance to that moving surface rather than to `y = 0`.
+sheet moves. The marcher tracks the signed distance to that moving surface rather than to
+`y = 0`.
 
-| Signal | Drives |
+The shape is a sum of **azimuthal vibration modes**, like a drum head, and that choice is
+what makes it legible. Wrapping a raw audio waveform around the disk — the obvious first
+idea — fails, because an audio waveform is high spatial frequency: you get fine
+corrugation that reads as fuzz, and you're forced to keep the amplitude tiny to stop it
+smearing the disk into a blob. A handful of low-order modes gives big coherent lobes you
+can actually follow, so the amplitude can be several times larger.
+
+Bands are separated by both mode number and radius, so instruments stay tellable apart:
+
+| Band | Modes | Where | Reads as |
+|---|---|---|---|
+| Bass | 2, 3 lobes | inner disk | kick and bassline — slow heaving |
+| Mid | 5, 7 lobes | mid radii | voice and melody — rolling undulation |
+| Treble | 11, 15 lobes | outer edge | hats and transients — fine shimmer |
+
+On top of that, the spectrum drives a swell travelling outward in radius (this carries the
+punch of a kick), and a little raw waveform is layered in for texture. The modes drift at
+different rates and phases so the pattern never freezes into a standing wave.
+
+| Signal | Also drives |
 |---|---|
-| Waveform | Azimuthal ripple running around the disk |
-| Log-spaced spectrum | Radial swell — bass heaves the inner disk, hats shiver the outer edge |
-| Surface slope | Sheen and crest/trough shading, which is what makes the wave readable edge-on |
+| Surface slope | Sheen and crest/trough shading — what makes the wave readable edge-on |
 | Bass | Brightness of the inner disk |
 | Mids | Turbulence in the disk filaments |
 | Level | How fast the disk turns |
 | Onsets | A gentle swell through the disk |
 
-The displacement is deliberately small. Viewed nearly edge-on a ray skims the disk and
-crosses a corrugated sheet many times, so large displacements smear the whole thing into
-a fluffy blob that swallows the lensed arc — and the warp is held rigid across the inner
-disk, where the photon ring and the arc are drawn. The wave is *read* from the slope
-shading; the geometry only has to carry it.
+The warp is held rigid across the inner rim, where the photon ring and the lensed arc are
+drawn — rippling it costs far more in crispness than it buys in motion. Depth is a
+*Wave depth* dial in the tray, from off to turbulent.
 
 Post: HDR half-float targets → bright pass → two ping-pong gaussian blurs → ACES tonemap,
 vignette, and grain.

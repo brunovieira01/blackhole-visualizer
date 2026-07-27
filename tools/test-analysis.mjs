@@ -81,6 +81,12 @@ function run(name, shape) {
       n++;
     }
   }
+  // How much of the spectrum is pinned at the top? A visualiser whose bars are
+  // all at maximum shows no detail at all.
+  const spec = h.eng.out.spectrum;
+  let hot = 0;
+  for (let i = 0; i < spec.length; i++) if (spec[i] > 242) hot++;
+
   const r = {
     name,
     bass: acc.bass / n,
@@ -88,10 +94,12 @@ function run(name, shape) {
     treble: acc.treble / n,
     level: acc.level / n,
     beats,
+    saturated: hot / spec.length,
   };
   console.log(
     `${name.padEnd(22)} bass=${r.bass.toFixed(3)}  mid=${r.mid.toFixed(3)}` +
-    `  treble=${r.treble.toFixed(3)}  level=${r.level.toFixed(3)}  onsets=${beats}`);
+    `  treble=${r.treble.toFixed(3)}  level=${r.level.toFixed(3)}` +
+    `  onsets=${String(beats).padStart(2)}  saturated=${(r.saturated * 100).toFixed(0)}%`);
   return r;
 }
 
@@ -101,6 +109,16 @@ const fullMix = (f, t) => {
   if (f < 160) db += 14 * Math.pow(1 - ((t * 2) % 1), 5);              // kick
   if (f > 2500) db += 12 * Math.pow(1 - ((t * 4) % 1), 9);             // hats
   if (f >= 160 && f <= 2500) db += 6 * Math.sin(t * 3 + f * 0.002);    // pads
+  return Math.max(MIN_DB, Math.min(MAX_DB, db));
+};
+
+// A loud, dense, broadband master - the kind of thing that pinned every bin at
+// maximum when the level was taken purely from a per-bin contrast stretch.
+const loudMix = (f, t) => {
+  let db = -14 - 5 * Math.log2(Math.max(f, 60) / 60);
+  db += 3 * Math.sin(t * 5 + f * 0.004);
+  if (f < 160) db += 5 * Math.pow(1 - ((t * 2) % 1), 5);
+  if (f > 2500) db += 5 * Math.pow(1 - ((t * 4) % 1), 9);
   return Math.max(MIN_DB, Math.min(MAX_DB, db));
 };
 
@@ -116,6 +134,7 @@ const silence = () => MIN_DB;
 
 console.log('\nanalyser balance check\n');
 const mix = run('full mix', fullMix);
+const loud = run('loud dense mix', loudMix);
 const bass = run('bass only', bassOnly);
 const treble = run('treble only (quiet)', trebleOnly);
 const quiet = run('silence', silence);
@@ -134,6 +153,16 @@ const spread = Math.max(mix.bass, mix.mid, mix.treble) /
 check(spread < 2.5, `full mix bands within 2.5x of each other (got ${spread.toFixed(2)}x)`);
 check(mix.treble > 0.25, `treble responds on a normal mix (${mix.treble.toFixed(3)})`);
 check(mix.beats > 8, `onsets detected across the mix (${mix.beats})`);
+
+// The failure this guards against: a purely relative (per-bin) normaliser
+// drives every bin to its own recent maximum, so a dense passage pins the
+// whole spectrum flat and the visualiser shows no detail at all.
+check(mix.saturated < 0.25,
+  `normal mix keeps headroom (${(mix.saturated * 100).toFixed(0)}% of bins maxed)`);
+check(loud.saturated < 0.40,
+  `loud dense mix still has detail (${(loud.saturated * 100).toFixed(0)}% of bins maxed)`);
+check(loud.treble > 0.25 && loud.bass > 0.25,
+  `loud mix still reads across bands (bass ${loud.bass.toFixed(2)}, treble ${loud.treble.toFixed(2)})`);
 
 // Band-limited signals must stay in their own lane.
 check(bass.bass > 0.35 && bass.treble < 0.10,

@@ -175,6 +175,8 @@ function applySettings(s) {
     bloom: settings.bloom ?? 1.0,
     reactivity: settings.reactivity ?? 1.0,
     warp: settings.warp ?? 1.0,
+    rings: settings.rings ?? 1.0,
+    ringStyle: settings.ringStyle ?? 1,
     grain: settings.grain ?? 0.012,
     autoOrbit: settings.autoOrbit ?? 0,
   });

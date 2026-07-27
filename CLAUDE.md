@@ -112,6 +112,20 @@ window flags like `transparent` and `focusable` can't be changed after creation.
 - Raising the warp means more sheet crossings per ray, so disk *density* gains have to
   come down with it or loud passages saturate to flat white. `diskDist`'s `reach` guard
   must also bound the largest height `diskHeight` can return, or rays skip the crests.
+- **Per-bin normalisation alone saturates.** A pure adaptive floor/ceiling stretch drives
+  every bin to its own recent maximum, so any dense passage pins the whole spectrum at
+  1.0 and all detail vanishes — it looked fine on sparse synthetic input and only showed
+  up against real music. `update()` blends a tilted *absolute* level (58%) with the
+  *relative* stretch (42%); `npm test` asserts both the balance and the saturation
+  fraction, so don't drop either component.
+- The audio ring is **one contour** (`ringRadius`) carrying spectrum and waveform
+  together; the four styles are just different renderings of that curve. Don't reintroduce
+  a second independent ring — that's what made it look cluttered.
+- The ring is drawn in the *scene* pass, not the composite, so bloom treats it as light
+  and the disk occludes it. That occlusion term is what stops it looking like a sticker.
+- Background is built from **contrast, not brightness**. If asked to make the sky richer,
+  raise the lumpiness (noise gamma, dust-lane depth, nebula cores) and leave the average
+  level alone, or the whole frame greys out behind the disk.
 - Config defaults are versioned (`CONFIG_VERSION` + `migrateConfig`). The file is only
   written on a tray interaction, so a user may have no config at all — but once written,
   it freezes every value, and changing a default later needs a migration to reach them.

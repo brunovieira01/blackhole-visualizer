@@ -47,6 +47,9 @@ export class AudioEngine {
     // Per-bin adaptive normalisation state
     this._ceil = new Float32Array(BINS);
     this._floor = new Float32Array(BINS);
+    this._raw = new Float32Array(BINS);
+    this._tilted = new Float32Array(BINS);
+    this._gain = 0.3;
     this._norm = new Float32Array(BINS);
     this._prevNorm = new Float32Array(BINS);
     this._smoothBin = new Float32Array(BINS);
@@ -168,26 +171,54 @@ export class AudioEngine {
     const ceil = this._ceil;
     const flr = this._floor;
 
-    // --- per-bin adaptive contrast stretch -------------------------------
-    // Ceiling tracks peaks instantly and bleeds away slowly; the floor does
-    // the mirror image. Normalising between them means a -75 dB hi-hat and a
-    // -25 dB kick both swing across the full range.
+    // --- per-bin level ---------------------------------------------------
+    // Two components, blended:
+    //
+    //   absolute - the real level with a fixed spectral tilt to offset music's
+    //              natural rolloff, divided by a slow global ceiling. Keeps
+    //              loud bins reading louder than quiet ones.
+    //   relative - a per-bin contrast stretch between adaptive floor/ceiling.
+    //              Lifts quiet bands so a -75 dB hi-hat is visible at all.
+    //
+    // Relative alone was the first attempt and it's wrong: by construction it
+    // drives every bin to its own recent maximum, so any dense passage pins
+    // the whole spectrum at 1.0 and all the detail disappears. Absolute alone
+    // is the classic all-bass-no-treble failure. The mix keeps both.
     const ceilFall = Math.min(1, dt * 0.55);
     const floorRise = Math.min(1, dt * 0.22);
     const binAtk = Math.min(1, dt * 34);
     const binRel = Math.min(1, dt * 8);
 
+    let loudest = 0;
     for (let i = 0; i < BINS; i++) {
       const [a, b] = this._binMap[i];
       let m = 0;
       for (let j = a; j < b; j++) if (this.freq[j] > m) m = this.freq[j];
       const raw = m / 255;
+      this._raw[i] = raw;
+      const tilted = raw * (0.62 + 0.80 * (i / BINS));
+      this._tilted[i] = tilted;
+      if (tilted > loudest) loudest = tilted;
+    }
+
+    // Global ceiling: snaps up, bleeds down, so quiet tracks still fill the
+    // screen without a loud one clipping everything flat.
+    this._gain = loudest > this._gain
+      ? this._gain + (loudest - this._gain) * Math.min(1, dt * 8)
+      : this._gain + (loudest - this._gain) * Math.min(1, dt * 0.30);
+    const gain = 1 / Math.max(this._gain, 0.18);
+
+    for (let i = 0; i < BINS; i++) {
+      const raw = this._raw[i];
 
       if (raw > ceil[i]) ceil[i] = raw; else ceil[i] += (raw - ceil[i]) * ceilFall;
       if (raw < flr[i]) flr[i] = raw; else flr[i] += (raw - flr[i]) * floorRise;
 
       const span = Math.max(ceil[i] - flr[i], 0.045);
-      let v = clamp01((raw - flr[i]) / span);
+      const rel = clamp01((raw - flr[i]) / span);
+      const abs = clamp01(this._tilted[i] * gain);
+
+      let v = abs * 0.58 + rel * 0.42;
 
       // Gate on the *absolute* level so a silent bin's noise floor doesn't get
       // stretched into a full-scale signal.
@@ -208,20 +239,28 @@ export class AudioEngine {
     }
 
     // --- waveform, auto-scaled so soft passages still ripple the disk -----
-    const step = this.time.length / BINS;
+    // Read a short window (~21 ms) and box-average each bucket. Point-sampling
+    // every Nth sample of the full buffer aliases badly: you get noise rather
+    // than a trace, which looks like grass on the oscilloscope ring.
+    const win = Math.min(this.time.length, BINS * 4);
+    const step = win / BINS;
     let peak = 0;
-    for (let i = 0; i < this.time.length; i += 4) {
+    for (let i = 0; i < win; i++) {
       const d = Math.abs(this.time[i] - 128);
       if (d > peak) peak = d;
     }
-    const target = 118 / Math.max(peak, 4);
+    const target = 112 / Math.max(peak, 6);
     // Ease the scale so the wave doesn't visibly "breathe" at every transient
-    this._waveScale += (Math.min(target, 7) - this._waveScale) * Math.min(1, dt * 2.2);
+    this._waveScale += (Math.min(target, 4) - this._waveScale) * Math.min(1, dt * 2.2);
     // Gate on the *absolute* peak: without this, the auto-scaler happily
     // amplifies a silent stream's dither into a full-size phantom ripple.
     const gate = clamp01((peak - 2.5) / 6);
     for (let i = 0; i < BINS; i++) {
-      const v = (this.time[(i * step) | 0] - 128) * this._waveScale * gate;
+      const a = (i * step) | 0;
+      const b = Math.max(a + 1, ((i + 1) * step) | 0);
+      let s = 0;
+      for (let j = a; j < b; j++) s += this.time[j] - 128;
+      const v = (s / (b - a)) * this._waveScale * gate;
       o.wave[i] = Math.max(0, Math.min(255, 128 + v));
     }
 

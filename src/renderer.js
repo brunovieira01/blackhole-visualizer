@@ -117,6 +117,8 @@ export class BlackHoleRenderer {
     this.grain = 0.012;
     this.reactivity = 1.0;
     this.warp = 1.0;
+    this.rings = 1.0;
+    this.ringStyle = 1;
     this.diskTilt = 0.155;
     this.autoOrbit = 0;
     this.alphaOut = 0;
@@ -154,6 +156,8 @@ export class BlackHoleRenderer {
     if (typeof s.bloom === 'number') this.bloom = s.bloom;
     if (typeof s.reactivity === 'number') this.reactivity = s.reactivity;
     if (typeof s.warp === 'number') this.warp = s.warp;
+    if (typeof s.rings === 'number') this.rings = s.rings;
+    if (typeof s.ringStyle === 'number') this.ringStyle = s.ringStyle;
     if (typeof s.grain === 'number') this.grain = s.grain;
     if (typeof s.autoOrbit === 'number') this.autoOrbit = s.autoOrbit;
     if (typeof s.diskTilt === 'number') this.diskTilt = s.diskTilt;
@@ -230,6 +234,8 @@ export class BlackHoleRenderer {
       gl.uniform1f(loc.uDiskTilt, this.diskTilt);
       gl.uniform1f(loc.uWarp, this.warp);
       gl.uniform1f(loc.uAmbient, this.autoOrbit > 0 ? 1 : 0);
+      gl.uniform1f(loc.uRings, this.rings);
+      gl.uniform1i(loc.uRingStyle, this.ringStyle);
       gl.uniform3fv(loc.uHot, t.hot);
       gl.uniform3fv(loc.uCool, t.cool);
       gl.uniform3fv(loc.uNebula, t.nebula);

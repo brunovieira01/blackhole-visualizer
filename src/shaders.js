@@ -129,6 +129,8 @@ uniform vec3  uCool;          // outer disk colour
 uniform vec3  uNebula;        // background nebula tint
 uniform float uDiskTilt;
 uniform float uAmbient;       // 1 = slow drift enabled, 0 = locked off
+uniform float uRings;         // strength of the audio ring
+uniform int   uRingStyle;     // 0 off, 1 contour, 2 ribbon, 3 comb, 4 halo
 
 const float R_S    = 1.0;     // Schwarzschild radius
 const float R_IN   = 2.6;     // inner disk edge (just inside ISCO, looks better)
@@ -137,6 +139,21 @@ const float R_FAR  = 60.0;    // escape radius
 
 float spectrum(float t) {
   return texture(uFFT, vec2(clamp(t, 0.0, 1.0), 0.5)).r;
+}
+
+// Radius of the audio ring at angle t (0 at 12 o'clock, 1 at 6 o'clock,
+// mirrored across the vertical axis so the curve closes seamlessly).
+//
+// This is where the spectrum and the waveform become one object: the spectrum
+// supplies the large lobes and the waveform rides on top as fine wobble, so a
+// single contour carries both readings instead of needing two rings.
+float ringRadius(float t, out float mag) {
+  // Skip the bottom of the spectrum - almost no music has content below
+  // ~45 Hz, so mapping it leaves a permanently bald patch at 12 o'clock.
+  // Gamma > 1 keeps a silhouette instead of flattening on busy material.
+  mag = pow(texture(uFFT, vec2(0.075 + 0.925 * t, 0.5)).r, 1.35);
+  float w = texture(uWave, vec2(t, 0.5)).r * 2.0 - 1.0;
+  return 0.60 + mag * 0.26 + w * 0.020;
 }
 
 // ---- the disk as a deformable sheet ---------------------------------------
@@ -231,6 +248,11 @@ vec3 starLayer(vec3 d, float scale, float density, float bright, vec3 tint) {
   return acc;
 }
 
+// Normal of the galactic plane. Deliberately tilted well away from the
+// accretion disk's plane so the arm crosses the frame at an angle and the two
+// structures read as separate things rather than one smear.
+const vec3 GAL_N = normalize(vec3(0.36, 0.84, -0.41));
+
 vec3 background(vec3 d) {
   vec3 col = vec3(0.0);
 
@@ -243,20 +265,51 @@ vec3 background(vec3 d) {
     dNear.xz = rot(uTime * 0.0045) * d.xz;
     dFar.xz  = rot(uTime * 0.0026) * d.xz;
   }
-  col += starLayer(dNear,  90.0, 0.955, 1.00, vec3(1.0, 0.92, 0.80));
-  col += starLayer(dFar,  210.0, 0.972, 0.55, vec3(0.85, 0.90, 1.10));
 
-  // Nebula: low-frequency fbm, warped so lensing near the hole is obvious.
-  // Two layers drifting in opposite directions so the cloud slowly churns.
-  float n = fbm3(d * 2.1 + vec3(uTime * 0.012, 0.0, uTime * 0.022), 5);
-  n = pow(max(n - 0.35, 0.0) * 1.9, 2.1);
-  float n2 = fbm3(d * 4.7 - vec3(uTime * 0.017, uTime * 0.009, 0.0), 4);
-  col += uNebula * n * 0.16;   // brightness is constant: never audio-reactive
-  col += uNebula.bgr * n * n2 * 0.055;
+  // ---- the galactic arm ----------------------------------------------
+  float gy   = dot(d, GAL_N);               // 0 on the galactic plane
+  float band = exp(-gy * gy * 30.0);        // tight bright core of the arm
+  float halo = exp(-gy * gy * 3.6);         // broad faint glow either side
 
-  // Faint galactic band for depth
-  float band = exp(-pow(d.y * 2.4, 2.0)) * 0.030;
-  col += mix(uNebula, vec3(0.5, 0.55, 0.7), 0.5) * band;
+  // Angle *along* the arm, for structure that runs down its length
+  vec3  al = normalize(d - GAL_N * gy);
+  float u  = atan(al.z, al.x);
+
+  // Contrast, not brightness. Making the arm brighter just greys out the sky;
+  // making it *lumpier* gives it structure while the average stays near black.
+  float cloud = fbm3(d * 3.1, 4);
+  cloud = pow(clamp(cloud * 1.35, 0.0, 1.0), 1.7);
+  float arm = band * (0.16 + 1.30 * cloud);
+
+  // Dust lanes. Dark filaments cutting along the arm are the single thing
+  // that makes a star cloud read as the Milky Way instead of a bright smudge.
+  float dust = fbm2(vec2(u * 2.7, gy * 11.0) + vec2(uTime * 0.004, 0.0), 4);
+  dust = smoothstep(0.36, 0.70, dust);
+  arm *= 1.0 - dust * 0.92;
+
+  col += vec3(0.72, 0.68, 0.74) * arm * 0.105;
+  col += mix(uNebula, vec3(0.30, 0.30, 0.40), 0.5) * halo * 0.014;
+
+  // ---- nebulae --------------------------------------------------------
+  // Two clouds with different hues and drifts, thresholded hard so they sit as
+  // distinct shapes against black rather than lifting the whole sky. Each gets
+  // a small, much brighter core: emission red on one, reflection blue on the
+  // other, which is what gives them a sense of being real objects.
+  float n1 = fbm3(d * 1.8 + vec3(9.2, 0.0, uTime * 0.010), 5);
+  n1 = pow(max(n1 - 0.44, 0.0) * 2.6, 2.0);
+  float n2 = fbm3(d * 2.6 - vec3(0.0, 4.1, uTime * 0.015), 4);
+  n2 = pow(max(n2 - 0.47, 0.0) * 2.6, 2.2);
+
+  col += uNebula * n1 * 0.10;
+  col += vec3(1.00, 0.42, 0.34) * pow(n1, 2.3) * 0.055;
+  col += uNebula.bgr * n2 * 0.060;
+  col += vec3(0.42, 0.62, 1.00) * pow(n2, 2.5) * 0.040;
+
+  // ---- stars ----------------------------------------------------------
+  // Denser inside the arm, which is what sells it as a star cloud.
+  col += starLayer(dNear,  90.0, 0.955 - band * 0.028, 1.00, vec3(1.0, 0.92, 0.80));
+  col += starLayer(dFar,  210.0, 0.972 - band * 0.018, 0.55, vec3(0.85, 0.90, 1.10));
+
   return col;
 }
 
@@ -411,6 +464,83 @@ void main() {
   float ring  = exp(-ringD * ringD * 90.0);
   col += uHot * ring * 0.30;
 
+  // ---- audio ring -----------------------------------------------------
+  // One shape, not two. The spectrum and the waveform used to be a bar crown
+  // and a separate oscilloscope loop fighting for the same space; here they
+  // are a single closed contour whose radius carries both — the spectrum
+  // gives the large lobes, the waveform adds the fine wobble on top. The four
+  // styles are just different ways of drawing that one curve.
+  //
+  // It's drawn into the scene buffer rather than over the finished frame, so
+  // the bloom pass treats it as emitted light and the disk can occlude it.
+  if (uRings > 0.001 && uRingStyle > 0) {
+    vec2  sp = uv * 2.0;                       // y in [-1, 1]
+    float rr = length(sp);
+    float px = 2.0 / uRes.y;                   // one pixel, in these units
+    float t2 = atan(abs(sp.x), sp.y) / PI;     // 0 at 12 o'clock, 1 at 6
+
+    const float R0 = 0.60;
+    float mag, magSeg, rSeg;
+    float R = ringRadius(t2, mag);
+
+    // Colour runs cool at the bass end and hot at the treble end, on top of
+    // the magnitude ramp - a literal temperature gradient around the ring.
+    vec3 bc = mix(uCool, uHot, clamp(mag * 0.95 + t2 * 0.55, 0.0, 1.0));
+    vec3 rings = vec3(0.0);
+
+    if (uRingStyle == 1) {
+      // Contour: a single glowing line, with a soft bloom skirt.
+      float d1 = (rr - R) / (1.7 * px);
+      rings += bc * exp(-d1 * d1) * (0.55 + 1.5 * mag);
+      float d2 = (rr - R) / (16.0 * px);
+      rings += bc * exp(-d2 * d2) * 0.16 * (0.30 + mag);
+
+    } else if (uRingStyle == 2) {
+      // Ribbon: a band of light following the contour. Filling all the way
+      // down to R0 made a solid gear that swallowed the whole frame, so this
+      // tracks the curve at a fixed thickness instead.
+      float thick = 0.045 + 0.035 * mag;
+      float inner = R - thick;
+      float a = smoothstep(inner - 1.5 * px, inner + 1.5 * px, rr)
+              * smoothstep(R + 1.5 * px, R - 1.5 * px, rr);
+      float along = clamp((rr - inner) / thick, 0.0, 1.0);
+      rings += bc * a * (0.35 + 0.65 * along) * (0.30 + 0.75 * mag);
+      float d1 = (rr - R) / (1.8 * px);
+      rings += bc * exp(-d1 * d1) * 0.50;
+
+    } else if (uRingStyle == 3) {
+      // Comb: discrete bars, but capped by the same continuous contour so it
+      // still reads as one object rather than bars plus a stray circle.
+      // Narrow bars with generous gaps and a fast fade outward, so a loud
+      // passage stays a comb rather than filling in to a solid gear.
+      const float BARS = 112.0;
+      float loc = fract(t2 * BARS);
+      float gap = smoothstep(0.14, 0.44, loc) * smoothstep(0.86, 0.56, loc);
+      rSeg = ringRadius((floor(t2 * BARS) + 0.5) / BARS, magSeg);
+      float base = R0 + 0.085;          // short bars: they hang off the curve
+      float a = smoothstep(base - 1.5 * px, base + 1.5 * px, rr)
+              * smoothstep(rSeg + 1.5 * px, rSeg - 1.5 * px, rr);
+      float along = clamp((rr - base) / max(rSeg - base, 1e-4), 0.0, 1.0);
+      rings += bc * a * gap * (1.0 - along * along * 0.88) * (0.20 + 0.52 * magSeg);
+      float d1 = (rr - R) / (1.8 * px);
+      rings += bc * exp(-d1 * d1) * 0.42;
+
+    } else {
+      // Halo: a soft band of light centred on the curve, no edges anywhere.
+      // Swelling outward from R0 instead made a solid sunburst.
+      float d1 = (rr - R) / (0.055 + 0.045 * mag);
+      rings += bc * exp(-d1 * d1) * (0.22 + 0.70 * mag);
+    }
+
+    // Let the scene occlude it: where the disk is bright it reads as being in
+    // front, which is what stops this looking like a sticker on the glass.
+    float lum = dot(col, vec3(0.2126, 0.7152, 0.0722));
+    rings *= 1.0 - clamp(lum * 0.9, 0.0, 0.88);
+
+    // Sink away to nothing in silence rather than sitting there as a dead ring.
+    col += rings * uRings * (0.08 + 0.92 * smoothstep(0.02, 0.22, uLevel));
+  }
+
   fragColor = vec4(max(col, 0.0), 1.0);
 }`;
 
@@ -512,9 +642,9 @@ void main() {
   col = aces(col * 1.05);
   col = pow(col, vec3(1.0 / 2.2));
 
-  // Vignette
-  float vig = smoothstep(1.75, 0.35, length(p) * 0.95);
-  col *= mix(0.62, 1.0, vig);
+  // Vignette, deep enough that the corners fall to near black
+  float vig = smoothstep(1.75, 0.30, length(p) * 0.95);
+  col *= mix(0.40, 1.0, vig);
 
   // Film grain keeps gradients from banding on dark backgrounds
   float g = hash13(vec3(gl_FragCoord.xy, fract(uTime) * 977.0)) - 0.5;

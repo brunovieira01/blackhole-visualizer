@@ -165,10 +165,13 @@ the equatorial plane are detected by sign change and shaded as an optically-thin
 accretion disk with Keplerian shear, relativistic beaming, Doppler tinting, and
 gravitational redshift.
 
-Then the audio goes in — **into the disk itself**, not into overlay widgets. The
-accretion disk isn't a flat plane: its height is a function of the audio, so the whole
-sheet moves. The marcher tracks the signed distance to that moving surface rather than to
-`y = 0`.
+Then the audio goes in, in two layers.
+
+### The disk
+
+The accretion disk isn't a flat plane: its height is a function of the audio, so the
+whole sheet moves. The marcher tracks the signed distance to that moving surface rather
+than to `y = 0`.
 
 The shape is a sum of **azimuthal vibration modes**, like a drum head, and that choice is
 what makes it legible. Wrapping a raw audio waveform around the disk — the obvious first
@@ -200,6 +203,38 @@ different rates and phases so the pattern never freezes into a standing wave.
 The warp is held rigid across the inner rim, where the photon ring and the lensed arc are
 drawn — rippling it costs far more in crispness than it buys in motion. Depth is a
 *Wave depth* dial in the tray, from off to turbulent.
+
+### The ring
+
+One shape, not two. The spectrum and the waveform are a **single closed contour** whose
+radius carries both — the spectrum gives the large lobes, the waveform rides on top as
+fine wobble. Bass sits at 12 o'clock and sweeps round to treble at 6, mirrored across the
+vertical axis so the curve closes seamlessly, and the colour runs cool at the bass end to
+hot at the treble end: a literal temperature gradient around the ring.
+
+Four ways of drawing that same curve, in the tray:
+
+| | |
+|---|---|
+| **Contour** | a single glowing line with a soft bloom skirt |
+| **Ribbon** | a thick band of light following the curve |
+| **Comb** | short discrete bars, capped by the contour so it still reads as one object |
+| **Halo** | a soft band centred on the curve, no edges anywhere |
+
+![The four ring styles](assets/preview-styles.jpg)
+
+It's drawn into the *scene* buffer rather than over the finished frame, which matters for
+two reasons: the bloom pass picks it up, so it reads as emitted light sharing the disk's
+glow instead of flat UI sitting on top; and the scene can occlude it, so the disk passes
+in front and the ring genuinely sits around the black hole in space.
+
+### The sky
+
+A galactic arm crosses the frame at an angle to the disk, with dark dust lanes cut
+through it — those lanes are what make a star cloud read as the Milky Way rather than a
+bright smudge. Star density rises inside the arm, and two nebulae drift with emission-red
+and reflection-blue cores. It's all built from contrast rather than brightness: the
+average stays near black so the background never greys out behind the disk.
 
 Post: HDR half-float targets → bright pass → two ping-pong gaussian blurs → ACES tonemap,
 vignette, and grain.

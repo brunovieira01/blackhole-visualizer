@@ -50,6 +50,8 @@ const DEFAULTS = {
   quality: 'auto',
   reactivity: 1.0,
   warp: 1.0,
+  rings: 1.0,
+  ringStyle: 1,          // 1 contour, 2 ribbon, 3 comb, 4 halo
   bloom: 0.75,
   grain: 0.012,
   // Slow ambient drift: camera orbit, a gentle tilt breath, and the starfield
@@ -421,6 +423,24 @@ function buildTray() {
         [1.6, 'Strong'],
         [2.3, 'Ridiculous'],
       ], config.reactivity, (v) => setConfig({ reactivity: v })),
+    },
+    {
+      label: 'Audio ring',
+      submenu: [
+        ...radio([
+          [1, 'Contour  (single line)'],
+          [2, 'Ribbon  (filled)'],
+          [3, 'Comb  (bars, capped)'],
+          [4, 'Halo  (soft glow)'],
+        ], config.ringStyle, (v) => setConfig({ ringStyle: v })),
+        { type: 'separator' },
+        ...radio([
+          [0, 'Off'],
+          [0.55, 'Subtle'],
+          [1.0, 'Normal'],
+          [1.7, 'Bold'],
+        ], config.rings, (v) => setConfig({ rings: v })),
+      ],
     },
     {
       label: 'Wave depth',

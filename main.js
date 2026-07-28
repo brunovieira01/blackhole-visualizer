@@ -316,6 +316,30 @@ function startupLinkPath() {
     'Black Hole Visualizer.lnk');
 }
 
+// The shortcut on disk is the source of truth - a user can delete it from the
+// Startup folder or via Task Manager without us knowing. Reconcile at boot so
+// the tray checkbox never lies, and re-point a stale shortcut at the current
+// executable (Electron's path changes when the app is moved or upgraded).
+function syncAutoStart() {
+  const link = startupLinkPath();
+  const present = fs.existsSync(link);
+
+  if (config.launchAtLogin && !present) {
+    config.launchAtLogin = setAutoStart(true);
+    saveConfig();
+  } else if (!config.launchAtLogin && present) {
+    config.launchAtLogin = true;      // adopt it rather than silently removing
+    saveConfig();
+  } else if (config.launchAtLogin && present) {
+    try {
+      const cur = shell.readShortcutLink(link);
+      if (cur.target !== process.execPath) setAutoStart(true);
+    } catch {
+      setAutoStart(true);             // unreadable / corrupt - rewrite it
+    }
+  }
+}
+
 function setAutoStart(enabled) {
   const link = startupLinkPath();
   try {
@@ -683,6 +707,7 @@ if (!app.requestSingleInstanceLock()) {
 
     setupCapture();
     setupIpc();
+    syncAutoStart();
     createWindow(config.mode);
     buildTray();
     startNowPlaying();

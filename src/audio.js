@@ -63,8 +63,28 @@ export class AudioEngine {
     this._demoPhase = 0;
   }
 
-  async start({ forceDemo = false } = {}) {
-    if (forceDemo) {
+  /**
+   * @param {object}   opts
+   * @param {boolean}  opts.forceDemo  skip capture, use the synthetic signal
+   * @param {Function} opts.onSource   called with the mode whenever capture is
+   *                                   (re-)acquired, so the UI can update
+   */
+  async start({ forceDemo = false, onSource = null } = {}) {
+    this._forceDemo = forceDemo;
+    this.onSource = onSource;
+
+    // Switching output device (speakers -> headphones, or a new default) does
+    // not error or end the loopback track: it just stops delivering samples,
+    // so the visualiser sits there looking like silence forever. Re-acquire.
+    if (!this._deviceListener && navigator.mediaDevices?.addEventListener) {
+      this._deviceListener = () => this._scheduleRestart('output device changed');
+      navigator.mediaDevices.addEventListener('devicechange', this._deviceListener);
+    }
+    return this._open();
+  }
+
+  async _open() {
+    if (this._forceDemo) {
       this.mode = 'demo';
       return 'demo';
     }
@@ -102,6 +122,36 @@ export class AudioEngine {
     return 'demo';
   }
 
+  // Tear down and re-acquire. Debounced, because Windows fires devicechange
+  // several times while it settles after a switch.
+  _scheduleRestart(reason) {
+    if (this._forceDemo || this._restarting) return;
+    this._restarting = true;
+    console.warn('[audio] re-acquiring capture:', reason);
+    clearTimeout(this._restartTimer);
+    this._restartTimer = setTimeout(async () => {
+      try {
+        this._teardown();
+        const mode = await this._open();
+        this.onSource?.(mode);
+      } catch (err) {
+        console.error('[audio] re-acquire failed:', err.message);
+      } finally {
+        this._restarting = false;
+        this._silentFor = 0;
+      }
+    }, 600);
+  }
+
+  _teardown() {
+    try { this.stream?.getTracks().forEach((t) => t.stop()); } catch { /* ignore */ }
+    try { this.ctx?.close(); } catch { /* ignore */ }
+    this.stream = null;
+    this.ctx = null;
+    this.analyser = null;
+    this.source = null;
+  }
+
   async _stereoMix() {
     // Needs a one-off getUserMedia to unlock device labels.
     await navigator.mediaDevices.getUserMedia({ audio: true }).then(
@@ -128,8 +178,15 @@ export class AudioEngine {
     // the desktop audio back out through the speakers.
     this.source.connect(this.analyser);
 
+    // These do fire for some transitions (device unplugged, stream revoked),
+    // so take the fast path when we can and leave the watchdog as a backstop.
+    const track = stream.getAudioTracks()[0];
+    track?.addEventListener('ended', () => this._scheduleRestart('track ended'));
+    track?.addEventListener('mute', () => this._scheduleRestart('track muted'));
+
     this.freq = new Uint8Array(this.analyser.frequencyBinCount);
     this.time = new Uint8Array(this.analyser.fftSize);
+    this._silentFor = 0;
     this._buildBinMap();
 
     // Some tracks arrive suspended until the window has focus.
@@ -199,6 +256,21 @@ export class AudioEngine {
       const tilted = raw * (0.62 + 0.80 * (i / BINS));
       this._tilted[i] = tilted;
       if (tilted > loudest) loudest = tilted;
+    }
+
+    // Watchdog. A loopback stream orphaned by a device switch returns perfect
+    // digital silence forever rather than erroring, and that is genuinely
+    // indistinguishable from a quiet room — so re-acquire on a long timeout.
+    // Harmless if it really was silence: re-opening costs a couple hundred ms
+    // and nothing is being drawn anyway.
+    if (loudest <= 0) {
+      this._silentFor += dt;
+      if (this._silentFor > 20) {
+        this._silentFor = 0;
+        this._scheduleRestart('no signal for 20s');
+      }
+    } else {
+      this._silentFor = 0;
     }
 
     // Global ceiling: snaps up, bleeds down, so quiet tracks still fill the
@@ -351,9 +423,11 @@ export class AudioEngine {
   }
 
   stop() {
-    this.stream?.getTracks().forEach((t) => t.stop());
-    this.ctx?.close().catch(() => {});
-    this.ctx = null;
-    this.analyser = null;
+    clearTimeout(this._restartTimer);
+    if (this._deviceListener) {
+      navigator.mediaDevices?.removeEventListener?.('devicechange', this._deviceListener);
+      this._deviceListener = null;
+    }
+    this._teardown();
   }
 }

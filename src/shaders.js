@@ -147,13 +147,20 @@ float spectrum(float t) {
 // This is where the spectrum and the waveform become one object: the spectrum
 // supplies the large lobes and the waveform rides on top as fine wobble, so a
 // single contour carries both readings instead of needing two rings.
+// Resting radius of the ring. Sits a little tighter than the swing needs, so
+// there's room for loud passages to throw the curve outward without it running
+// off the top and bottom of the frame.
+const float RING_R0 = 0.55;
+
 float ringRadius(float t, out float mag) {
   // Skip the bottom of the spectrum - almost no music has content below
   // ~45 Hz, so mapping it leaves a permanently bald patch at 12 o'clock.
   // Gamma > 1 keeps a silhouette instead of flattening on busy material.
   mag = pow(texture(uFFT, vec2(0.075 + 0.925 * t, 0.5)).r, 1.35);
   float w = texture(uWave, vec2(t, 0.5)).r * 2.0 - 1.0;
-  return 0.60 + mag * 0.26 + w * 0.020;
+  // Swing is bounded so a full-scale peak plus the bloom skirt still stays
+  // inside the frame vertically (sp.y runs -1..1).
+  return RING_R0 + mag * 0.325 + w * 0.028;
 }
 
 // ---- the disk as a deformable sheet ---------------------------------------
@@ -479,7 +486,7 @@ void main() {
     float px = 2.0 / uRes.y;                   // one pixel, in these units
     float t2 = atan(abs(sp.x), sp.y) / PI;     // 0 at 12 o'clock, 1 at 6
 
-    const float R0 = 0.60;
+    const float R0 = RING_R0;
     float mag, magSeg, rSeg;
     float R = ringRadius(t2, mag);
 

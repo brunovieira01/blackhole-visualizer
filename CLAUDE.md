@@ -123,6 +123,16 @@ window flags like `transparent` and `focusable` can't be changed after creation.
   a second independent ring — that's what made it look cluttered.
 - The ring is drawn in the *scene* pass, not the composite, so bloom treats it as light
   and the disk occludes it. That occlusion term is what stops it looking like a sticker.
+- **Output device changes don't error.** A WASAPI loopback stream orphaned by an output
+  switch keeps returning perfect digital silence forever — indistinguishable from a quiet
+  room, and the track usually doesn't end or mute. `AudioEngine` handles it with a
+  `devicechange` listener, track `ended`/`mute` handlers, and a 20 s all-zero watchdog as
+  backstop. Don't "optimise away" the watchdog: the event alone doesn't cover every case.
+- Autostart is a Startup-folder `.lnk`, and the file on disk is the source of truth.
+  `syncAutoStart()` reconciles config against it at boot and re-points a stale target, so
+  the tray checkbox can't drift out of sync with reality.
+- Ring swing (`ringRadius`) is bounded so a full-scale peak plus the bloom skirt stays
+  inside the frame; `sp.y` runs -1..1, so anything past ~0.90 starts clipping vertically.
 - Background is built from **contrast, not brightness**. If asked to make the sky richer,
   raise the lumpiness (noise gamma, dust-lane depth, nebula cores) and leave the average
   level alone, or the whole frame greys out behind the disk.

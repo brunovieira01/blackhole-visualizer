@@ -21,7 +21,10 @@ powershell -ExecutionPolicy Bypass -File setup.ps1
 
 That installs the dependencies, builds the icons, and drops a **Black Hole Visualizer**
 shortcut on your Desktop. Double-click it and the black hole becomes your wallpaper.
-Add `-Startup` to the setup command if you want it to come back on every login.
+
+Add `-Startup` to have it come back on every login — or tick **Start with Windows** in
+the tray, which does the same thing. Either way it's a shortcut in your Startup folder,
+which you can delete by hand; the app notices and updates the tray to match.
 
 Everything else lives in the **tray icon** next to the clock. No window to keep open,
 nothing to babysit.
@@ -120,6 +123,12 @@ nothing is routed back out through your speakers.
 If loopback is unavailable it falls back, in order, to a Stereo-Mix-style input device,
 then any microphone, then a synthetic beat so the visuals never sit there dead. The tray
 menu shows which one is live.
+
+**Changing output device** — plugging in headphones, switching the default — is handled
+automatically. It has to be: a loopback stream orphaned by a device switch doesn't error
+or end, it just returns perfect digital silence forever, which is indistinguishable from
+a quiet room. So capture is re-acquired on `devicechange`, on the track ending or muting,
+and on a 20-second all-zero watchdog as a backstop.
 
 ### Hearing the quiet things too
 

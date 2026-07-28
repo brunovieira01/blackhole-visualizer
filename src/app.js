@@ -382,9 +382,18 @@ async function main() {
     bindOverlayHover();
   }
 
-  const src = await audio.start({ forceDemo: !!settings.forceDemo });
-  els.source.textContent = SOURCE_LABEL[src] || src;
-  bridge?.reportSource(src);
+  const showSource = (s) => {
+    els.source.textContent = SOURCE_LABEL[s] || s;
+    bridge?.reportSource(s);
+  };
+
+  const src = await audio.start({
+    forceDemo: !!settings.forceDemo,
+    // Fires again whenever capture is re-acquired after an output device
+    // change, so the HUD and tray don't keep claiming the old source.
+    onSource: showSource,
+  });
+  showSource(src);
   if (src === 'demo') {
     console.warn('[audio] falling back to the demo signal — no capture device was available');
   }

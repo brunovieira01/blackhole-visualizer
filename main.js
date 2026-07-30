@@ -70,13 +70,18 @@ let forceDemo = false;
 
 let config = { ...DEFAULTS };
 let configPath;
-let win = null;
+let win = null;           // primary display's window — owns the tray, hotkeys, HUD
+let wins = [];            // { win, display } for every other monitor when spanning
 let tray = null;
 let currentMode = 'window';
 let attachedToDesktop = false;
 let audioSource = 'starting…';
 let quitting = false;
 let shotPath = null;
+
+function allWindows() {
+  return [win, ...wins.map((e) => e.win)].filter((w) => w && !w.isDestroyed());
+}
 
 // ---------------------------------------------------------------------------
 //  Config
@@ -122,7 +127,7 @@ function setConfig(patch, { recreate = false } = {}) {
   Object.assign(config, patch);
   saveConfig();
   if (recreate) createWindow(config.mode);
-  else win?.webContents.send('settings', config);
+  else for (const w of allWindows()) w.webContents.send('settings', config);
   buildTray();
 }
 
@@ -138,22 +143,27 @@ function virtualBoundsDip() {
   return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
 }
 
-function targetBoundsDip() {
-  return config.allMonitors ? virtualBoundsDip() : screen.getPrimaryDisplay().bounds;
+// One window per monitor, each sized to just that monitor — spanning a
+// single combined canvas across displays of different size/position (the
+// old approach) crops, stretches and rescales the scene at the seam, since
+// the shader's composition assumes a single screen's aspect ratio.
+function displaysForMode(mode) {
+  if (mode === 'window') return [screen.getPrimaryDisplay()];
+  return config.allMonitors ? screen.getAllDisplays() : [screen.getPrimaryDisplay()];
 }
 
 // The wallpaper host window spans the whole virtual desktop and its client
 // origin is the virtual top-left, so our child coordinates are relative to it.
-function wallpaperChildRect() {
+function wallpaperChildRectForDisplay(display) {
   const virt = screen.dipToScreenRect(null, virtualBoundsDip());
-  const tgt = screen.dipToScreenRect(null, targetBoundsDip());
+  const tgt = screen.dipToScreenRect(null, display.bounds);
   return { x: tgt.x - virt.x, y: tgt.y - virt.y, width: tgt.width, height: tgt.height };
 }
 
 // ---------------------------------------------------------------------------
 //  Window
 // ---------------------------------------------------------------------------
-function windowOptions(mode) {
+function windowOptions(mode, display) {
   const base = {
     show: false,
     backgroundColor: mode === 'overlay' ? '#00000000' : '#000000',
@@ -171,7 +181,7 @@ function windowOptions(mode) {
     return { ...base, width: 1280, height: 800, minWidth: 480, minHeight: 360, title: 'Black Hole Visualizer' };
   }
 
-  const b = targetBoundsDip();
+  const b = display.bounds;
   const passive = {
     ...base,
     x: b.x, y: b.y, width: b.width, height: b.height,
@@ -194,61 +204,54 @@ function windowOptions(mode) {
   return passive; // wallpaper
 }
 
-function createWindow(mode) {
-  if (!MODES.includes(mode)) mode = 'window';
+// Sets up show/attach behaviour for one already-constructed window. `isPrimary`
+// gates the bits that must only happen once: owning `win`, the tray, and the
+// --shot capture. Secondary monitors get a fully independent instance of the
+// same scene, kept in sync via the settings/nowplaying broadcasts below.
+function setupWindowInstance(w, mode, display, isPrimary) {
+  w.removeMenu();
+  w.loadFile(path.join(__dirname, 'src', 'index.html'));
 
-  const old = win;
-  attachedToDesktop = false;
-  win = new BrowserWindow(windowOptions(mode));
-  currentMode = mode;
-
-  if (old && !old.isDestroyed()) {
-    try { wallpaper.detach(old); } catch { /* ignore */ }
-    old.destroy();
-  }
-
-  win.removeMenu();
-  win.loadFile(path.join(__dirname, 'src', 'index.html'));
-
-  win.on('closed', () => { win = null; });
+  if (isPrimary) w.on('closed', () => { win = null; });
+  else w.on('closed', () => { wins = wins.filter((e) => e.win !== w); });
 
   // A frameless passive window should never steal focus or show in Alt+Tab.
   if (mode !== 'window') {
-    win.setIgnoreMouseEvents(true, { forward: true });
-    win.setSkipTaskbar(true);
+    w.setIgnoreMouseEvents(true, { forward: true });
+    w.setSkipTaskbar(true);
   }
 
-  win.once('ready-to-show', () => {
+  w.once('ready-to-show', () => {
     if (mode === 'wallpaper') {
-      const res = wallpaper.attach(win, wallpaperChildRect());
-      attachedToDesktop = res.ok;
+      const res = wallpaper.attach(w, wallpaperChildRectForDisplay(display));
+      if (isPrimary) attachedToDesktop = res.ok;
       if (res.ok) {
-        applyWallpaperGeometry();
+        applyWallpaperGeometryFor(w, display);
         console.log('[wallpaper] embedded into desktop layer (host 0x' +
-          res.host.toString(16) + '), size ' +
-          JSON.stringify(win.getContentBounds()));
+          res.host.toString(16) + '), size ' + JSON.stringify(w.getContentBounds()) +
+          (isPrimary ? '' : ' [secondary monitor]'));
       } else {
-        console.warn('[wallpaper] embedding failed:', res.reason);
+        console.warn('[wallpaper] embedding failed:', res.reason, isPrimary ? '' : '[secondary monitor]');
         // Graceful fallback: sit at the bottom of the z-order. Not a true
         // wallpaper (it covers desktop icons) but it still looks right.
-        win.setAlwaysOnTop(false);
-        win.on('focus', () => win.blur());
+        w.setAlwaysOnTop(false);
+        w.on('focus', () => w.blur());
       }
-      win.showInactive();
+      w.showInactive();
     } else if (mode === 'overlay') {
-      win.setAlwaysOnTop(true, 'screen-saver');
-      win.showInactive();
+      w.setAlwaysOnTop(true, 'screen-saver');
+      w.showInactive();
     } else {
-      win.show();
+      w.show();
     }
-    buildTray();
+    if (isPrimary) buildTray();
   });
 
-  if (shotPath) {
-    win.webContents.once('did-finish-load', () => {
+  if (isPrimary && shotPath) {
+    w.webContents.once('did-finish-load', () => {
       setTimeout(async () => {
         try {
-          const img = await win.webContents.capturePage();
+          const img = await w.webContents.capturePage();
           fs.writeFileSync(shotPath, img.toPNG());
           console.log('[shot] wrote ' + shotPath);
         } catch (err) {
@@ -261,6 +264,36 @@ function createWindow(mode) {
   }
 }
 
+function createWindow(mode) {
+  if (!MODES.includes(mode)) mode = 'window';
+
+  const oldWin = win;
+  const oldWins = wins;
+  attachedToDesktop = false;
+  currentMode = mode;
+
+  const displays = displaysForMode(mode);
+  win = new BrowserWindow(windowOptions(mode, displays[0]));
+  setupWindowInstance(win, mode, displays[0], true);
+
+  wins = displays.slice(1).map((display) => {
+    const w = new BrowserWindow(windowOptions(mode, display));
+    setupWindowInstance(w, mode, display, false);
+    return { win: w, display };
+  });
+
+  if (oldWin && !oldWin.isDestroyed()) {
+    try { wallpaper.detach(oldWin); } catch { /* ignore */ }
+    oldWin.destroy();
+  }
+  for (const { win: ow } of oldWins) {
+    if (!ow.isDestroyed()) {
+      try { wallpaper.detach(ow); } catch { /* ignore */ }
+      ow.destroy();
+    }
+  }
+}
+
 // Windows clamps a new top-level window to the monitor *work area*, so a
 // 1440px-tall screen with a 48px taskbar yields a 1392px window. Resizing the
 // native handle alone isn't enough — Chromium keeps painting at the size it
@@ -268,23 +301,24 @@ function createWindow(mode) {
 // child of WorkerW the clamp no longer applies, so re-apply the full size
 // through Electron (which resizes the compositor) and then place the window
 // natively at the exact pixel rect.
-function applyWallpaperGeometry() {
-  const child = wallpaperChildRect();
-  const scale = screen.getPrimaryDisplay().scaleFactor || 1;
-  win.setBounds({
+function applyWallpaperGeometryFor(w, display) {
+  const child = wallpaperChildRectForDisplay(display);
+  const scale = display.scaleFactor || 1;
+  w.setBounds({
     x: 0,
     y: 0,
     width: Math.round(child.width / scale),
     height: Math.round(child.height / scale),
   });
-  wallpaper.reposition(win, child);
+  wallpaper.reposition(w, child);
 }
 
-// Monitors changed / resolution changed -> resize the passive window.
+// Monitors changed / resolution changed -> rebuild the window set to match
+// the new topology (adding/removing/moving displays is rare enough that a
+// full recreate is simpler and safer than patching per-window bounds).
 function refreshGeometry() {
   if (!win || win.isDestroyed() || currentMode === 'window') return;
-  if (currentMode === 'wallpaper' && attachedToDesktop) applyWallpaperGeometry();
-  else win.setBounds(targetBoundsDip());
+  createWindow(currentMode);
 }
 
 // ---------------------------------------------------------------------------
@@ -591,7 +625,7 @@ function startNowPlaying() {
           `|${o.canNext}|${o.canPrev}|${o.canPlay}|${o.canPause}`;
         const changed = key(next) !== key(nowPlaying);
         nowPlaying = next;
-        win?.webContents.send('nowplaying', nowPlaying);
+        for (const w of allWindows()) w.webContents.send('nowplaying', nowPlaying);
         if (changed) buildTray();
       } catch {
         console.error('[nowplaying] unparseable line:', line.slice(0, 200));
@@ -658,10 +692,12 @@ function setupIpc() {
     }
   });
   // Overlay mode is click-through; the renderer asks for clicks back while the
-  // pointer is over the transport controls.
+  // pointer is over the transport controls. Each monitor's window is its own
+  // independent instance, so this must target whichever one sent the event.
   ipcMain.on('interactive', (_e, on) => {
-    if (currentMode === 'overlay' && win && !win.isDestroyed()) {
-      win.setIgnoreMouseEvents(!on, { forward: true });
+    const w = BrowserWindow.fromWebContents(_e.sender);
+    if (currentMode === 'overlay' && w && !w.isDestroyed()) {
+      w.setIgnoreMouseEvents(!on, { forward: true });
     }
   });
   ipcMain.on('source', (_e, src) => { audioSource = src; buildTray(); });
@@ -714,8 +750,8 @@ if (!app.requestSingleInstanceLock()) {
 
     globalShortcut.register('Control+Alt+B', () => {
       if (!win || win.isDestroyed()) return createWindow(config.mode);
-      if (win.isVisible()) win.hide();
-      else win.showInactive();
+      const show = !win.isVisible();
+      for (const w of allWindows()) { if (show) w.showInactive(); else w.hide(); }
     });
 
     // Transport hotkeys — the only way to drive playback while the visualiser
@@ -741,6 +777,8 @@ if (!app.requestSingleInstanceLock()) {
   app.on('will-quit', () => {
     globalShortcut.unregisterAll();
     stopNowPlaying();
-    if (win && !win.isDestroyed() && attachedToDesktop) wallpaper.detach(win);
+    if (currentMode === 'wallpaper') {
+      for (const w of allWindows()) { try { wallpaper.detach(w); } catch { /* ignore */ } }
+    }
   });
 }

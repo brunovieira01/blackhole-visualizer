@@ -31,6 +31,14 @@ Write-Host "> generating icons"
 node tools\make-icon.js
 
 $exe = Join-Path $root "node_modules\electron\dist\electron.exe"
+if (-not (Test-Path $exe)) {
+  # Electron 43+ ships no postinstall hook; the binary is fetched lazily on the
+  # first require(). The shortcut below points straight at the .exe, so pull it
+  # down now rather than on whatever the user's first launch happens to be.
+  Write-Host "> downloading the Electron binary (~100 MB, first time only)"
+  node "node_modules\electron\install.js"
+  if ($LASTEXITCODE -ne 0) { throw "Electron binary download failed" }
+}
 if (-not (Test-Path $exe)) { throw "Electron binary missing at $exe" }
 
 function New-Shortcut([string]$LinkPath) {

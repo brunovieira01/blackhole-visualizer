@@ -316,9 +316,21 @@ function applyWallpaperGeometryFor(w, display) {
 // Monitors changed / resolution changed -> rebuild the window set to match
 // the new topology (adding/removing/moving displays is rare enough that a
 // full recreate is simpler and safer than patching per-window bounds).
+//
+// Debounced: some external/wireless displays fire several metrics-changed
+// events in quick succession while renegotiating resolution/DPI, each with
+// a different (sometimes transient/wrong) geometry. Recreating on every one
+// of those can leave a window sized to an intermediate reading. Waiting for
+// the event stream to go quiet for a moment means we build against whatever
+// the display settles on, not whatever it happened to report mid-handshake.
+let refreshGeometryTimer = null;
 function refreshGeometry() {
   if (!win || win.isDestroyed() || currentMode === 'window') return;
-  createWindow(currentMode);
+  clearTimeout(refreshGeometryTimer);
+  refreshGeometryTimer = setTimeout(() => {
+    if (!win || win.isDestroyed() || currentMode === 'window') return;
+    createWindow(currentMode);
+  }, 800);
 }
 
 // ---------------------------------------------------------------------------
@@ -777,6 +789,7 @@ if (!app.requestSingleInstanceLock()) {
   app.on('will-quit', () => {
     globalShortcut.unregisterAll();
     stopNowPlaying();
+    clearTimeout(refreshGeometryTimer);
     if (currentMode === 'wallpaper') {
       for (const w of allWindows()) { try { wallpaper.detach(w); } catch { /* ignore */ } }
     }

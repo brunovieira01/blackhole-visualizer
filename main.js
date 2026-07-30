@@ -83,6 +83,17 @@ function allWindows() {
   return [win, ...wins.map((e) => e.win)].filter((w) => w && !w.isDestroyed());
 }
 
+// One GPU process backs every window, so a crash reports once per window.
+// Coalesce them into a single rebuild, on a short delay so a window that
+// dies again immediately can't spin into a rebuild loop.
+let rebuildTimer = null;
+function scheduleRebuild() {
+  clearTimeout(rebuildTimer);
+  rebuildTimer = setTimeout(() => {
+    if (!quitting) createWindow(currentMode);
+  }, 1200);
+}
+
 // ---------------------------------------------------------------------------
 //  Config
 // ---------------------------------------------------------------------------
@@ -221,6 +232,16 @@ function setupWindowInstance(w, mode, display, isPrimary) {
 
   if (isPrimary) w.on('closed', () => { win = null; });
   else w.on('closed', () => { wins = wins.filter((e) => e.win !== w); });
+
+  // A GPU process crash takes the renderer down with it and leaves an empty
+  // window behind — the app looks dead while its process (and single-instance
+  // lock) is still very much alive. `reason` is 'crashed'/'abnormal-exit' for
+  // real failures; a clean shutdown reports 'clean-exit' and needs no rescue.
+  w.webContents.on('render-process-gone', (_e, details) => {
+    if (quitting || details.reason === 'clean-exit') return;
+    console.error('[renderer] process gone (' + details.reason + '), rebuilding');
+    scheduleRebuild();
+  });
 
   // A frameless passive window should never steal focus or show in Alt+Tab.
   if (mode !== 'window') {
@@ -744,7 +765,16 @@ if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
   app.on('second-instance', () => {
-    if (currentMode === 'window') { win?.show(); win?.focus(); }
+    // Launching again with no live window means the window died but the
+    // process (and its single-instance lock) outlived it — a GPU process
+    // crash does exactly this. Without rebuilding here, every further
+    // launch is swallowed by the lock and the app looks like it simply
+    // won't start, with only a tray icon to show for it.
+    if (!win || win.isDestroyed()) {
+      createWindow(config.mode);
+      return;
+    }
+    if (currentMode === 'window') { win.show(); win.focus(); }
     else dialog.showMessageBox({
       type: 'info',
       title: 'Black Hole Visualizer',
@@ -827,6 +857,7 @@ if (!app.requestSingleInstanceLock()) {
     globalShortcut.unregisterAll();
     stopNowPlaying();
     clearTimeout(refreshGeometryTimer);
+    clearTimeout(rebuildTimer);
     if (currentMode === 'wallpaper') {
       for (const w of allWindows()) { try { wallpaper.detach(w); } catch { /* ignore */ } }
     }

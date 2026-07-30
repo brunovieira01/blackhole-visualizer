@@ -147,8 +147,7 @@ function virtualBoundsDip() {
 // single combined canvas across displays of different size/position (the
 // old approach) crops, stretches and rescales the scene at the seam, since
 // the shader's composition assumes a single screen's aspect ratio.
-function displaysForMode(mode) {
-  if (mode === 'window') return [screen.getPrimaryDisplay()];
+function displaysForMode() {
   return config.allMonitors ? screen.getAllDisplays() : [screen.getPrimaryDisplay()];
 }
 
@@ -178,7 +177,15 @@ function windowOptions(mode, display) {
   };
 
   if (mode === 'window') {
-    return { ...base, width: 1280, height: 800, minWidth: 480, minHeight: 360, title: 'Black Hole Visualizer' };
+    // Positioned on the right monitor from the start (offset so several
+    // windows don't stack exactly on top of each other) — setupWindowInstance
+    // maximizes it there when spanning more than one display.
+    return {
+      ...base,
+      x: display.bounds.x + 60, y: display.bounds.y + 60,
+      width: 1280, height: 800, minWidth: 480, minHeight: 360,
+      title: 'Black Hole Visualizer',
+    };
   }
 
   const b = display.bounds;
@@ -243,6 +250,13 @@ function setupWindowInstance(w, mode, display, isPrimary) {
       w.showInactive();
     } else {
       w.show();
+      // Filling every screen only makes sense once there's more than one
+      // window to fill them with — a single window mode instance keeps its
+      // normal floating size. Maximizing (rather than computing bounds
+      // ourselves) hands sizing to Windows' own per-window logic, which
+      // handles the taskbar/work-area and any DPI quirks far more reliably
+      // than the manual math the wallpaper path needed.
+      if (wins.length > 0) w.maximize();
     }
     if (isPrimary) buildTray();
   });
@@ -272,7 +286,7 @@ function createWindow(mode) {
   attachedToDesktop = false;
   currentMode = mode;
 
-  const displays = displaysForMode(mode);
+  const displays = displaysForMode();
   win = new BrowserWindow(windowOptions(mode, displays[0]));
   setupWindowInstance(win, mode, displays[0], true);
 
@@ -713,9 +727,13 @@ function setupIpc() {
     }
   });
   ipcMain.on('source', (_e, src) => { audioSource = src; buildTray(); });
-  ipcMain.on('hide', () => { if (currentMode === 'window') win?.hide(); });
-  ipcMain.on('toggle-fullscreen', () => {
-    if (currentMode === 'window' && win) win.setFullScreen(!win.isFullScreen());
+  ipcMain.on('hide', (_e) => {
+    const w = BrowserWindow.fromWebContents(_e.sender);
+    if (currentMode === 'window' && w && !w.isDestroyed()) w.hide();
+  });
+  ipcMain.on('toggle-fullscreen', (_e) => {
+    const w = BrowserWindow.fromWebContents(_e.sender);
+    if (currentMode === 'window' && w && !w.isDestroyed()) w.setFullScreen(!w.isFullScreen());
   });
 }
 
@@ -756,9 +774,32 @@ if (!app.requestSingleInstanceLock()) {
     setupCapture();
     setupIpc();
     syncAutoStart();
+
+    // Registered before the first createWindow() call, not after: a monitor
+    // that's still settling (renegotiating resolution/DPI) right at launch
+    // needs its eventual display-added/metrics-changed event to reach a
+    // listener that already exists, or that event is the only chance to
+    // self-correct and it's missed for the rest of the session.
+    screen.on('display-metrics-changed', refreshGeometry);
+    screen.on('display-added', refreshGeometry);
+    screen.on('display-removed', refreshGeometry);
+
     createWindow(config.mode);
     buildTray();
     startNowPlaying();
+
+    // Belt and braces: the listeners above only fire on a *change*. If a
+    // monitor was already mid-renegotiation when getAllDisplays() was first
+    // read, the window set can end up built for the wrong display count with
+    // no further event ever arriving to say so (nothing changes again from
+    // the OS's point of view). Compare what we built against what's actually
+    // connected a couple of seconds in, once things have had time to settle.
+    setTimeout(() => {
+      if (!win || win.isDestroyed()) return;
+      const expected = displaysForMode().length;
+      const actual = 1 + wins.length;
+      if (expected !== actual) createWindow(currentMode);
+    }, 3000);
 
     globalShortcut.register('Control+Alt+B', () => {
       if (!win || win.isDestroyed()) return createWindow(config.mode);
@@ -777,10 +818,6 @@ if (!app.requestSingleInstanceLock()) {
         console.warn(`[hotkey] ${accel} is already taken by another app`);
       }
     }
-
-    screen.on('display-metrics-changed', refreshGeometry);
-    screen.on('display-added', refreshGeometry);
-    screen.on('display-removed', refreshGeometry);
   });
 
   // The tray keeps the app alive; closing the window shouldn't quit it.

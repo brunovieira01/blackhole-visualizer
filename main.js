@@ -706,7 +706,7 @@ function nowPlayingLabel() {
 //  IPC
 // ---------------------------------------------------------------------------
 function setupIpc() {
-  ipcMain.handle('get-settings', () => ({ ...config, forceDemo }));
+  ipcMain.handle('get-settings', () => ({ ...config, forceDemo, shotMode: !!shotPath }));
   ipcMain.handle('get-mode', () => currentMode);
   ipcMain.handle('get-nowplaying', () => nowPlaying);
   ipcMain.handle('set', (_e, key, value) => {

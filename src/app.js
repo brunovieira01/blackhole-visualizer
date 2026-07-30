@@ -359,14 +359,19 @@ function bindInteraction() {
 //  Main loop
 // ---------------------------------------------------------------------------
 async function main() {
-  renderer = new BlackHoleRenderer(canvas);
+  // Fetched before the renderer is built because the GL context options are
+  // fixed at creation time and one of them (preserveDrawingBuffer) depends on
+  // whether this is a --shot run.
+  const initialSettings = (await bridge?.getSettings()) || {};
+
+  renderer = new BlackHoleRenderer(canvas, { forShot: !!initialSettings.shotMode });
   audio = new AudioEngine();
 
   mode = (await bridge?.getMode()) || 'window';
   document.body.classList.toggle('passive', mode !== 'window');
   renderer.alphaOut = mode === 'overlay' ? 1 : 0;
 
-  applySettings((await bridge?.getSettings()) || {});
+  applySettings(initialSettings);
   bridge?.onSettings((s) => applySettings(s));
 
   nowPlaying = (await bridge?.getNowPlaying()) || { kind: 'none' };

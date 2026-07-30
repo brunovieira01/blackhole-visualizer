@@ -72,7 +72,7 @@ class Target {
 }
 
 export class BlackHoleRenderer {
-  constructor(canvas) {
+  constructor(canvas, opts = {}) {
     const gl = canvas.getContext('webgl2', {
       alpha: true, // overlay mode needs a real alpha channel to punch through
 
@@ -80,7 +80,11 @@ export class BlackHoleRenderer {
       depth: false,
       stencil: false,
       powerPreference: 'high-performance',
-      preserveDrawingBuffer: true, // needed for capturePage / screenshots
+      // Only for --shot, which reads the buffer back after the frame is done.
+      // Keeping it on the whole time stops the driver discarding the buffer
+      // between frames, which costs real throughput on an integrated GPU —
+      // and throughput is what the adaptive quality spends on resolution.
+      preserveDrawingBuffer: !!opts.forShot,
     });
     if (!gl) throw new Error('WebGL2 is not available on this machine.');
 

@@ -394,6 +394,7 @@ async function main() {
 
   const src = await audio.start({
     forceDemo: !!settings.forceDemo,
+    allowMicInput: settings.allowMicInput === true,
     // Fires again whenever capture is re-acquired after an output device
     // change, so the HUD and tray don't keep claiming the old source.
     onSource: showSource,

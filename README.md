@@ -120,9 +120,25 @@ The renderer asks for `getDisplayMedia`, and the main process answers with
 mix, straight from Windows. No Stereo Mix, no VB-Cable, no virtual audio device, and
 nothing is routed back out through your speakers.
 
-If loopback is unavailable it falls back, in order, to a Stereo-Mix-style input device,
-then any microphone, then a synthetic beat so the visuals never sit there dead. The tray
-menu shows which one is live.
+If loopback is unavailable it falls back to a synthetic beat, so the visuals never sit
+there dead. The tray menu shows which source is live.
+
+### It never touches your microphone
+
+Loopback captures a *render* endpoint. Windows doesn't treat that as microphone access:
+no mic-in-use indicator, no privacy prompt, and no contention with anything else using
+your mic.
+
+That's the only source used by default, deliberately. Input devices — Stereo Mix
+included — count as microphone use no matter how loopback-ish the device name is, so
+they're behind **Allow microphone input** in the tray, which is off unless you turn it on.
+
+This was a real bug, not a hypothetical. An earlier version probed
+`getUserMedia({audio: true})` — the default microphone — just to reveal device labels
+while looking for Stereo Mix, and it re-ran that probe on every `devicechange`: every
+headset plug, every default-device switch, every meeting join. It also matched a bare
+`stereo`, which would happily select a headset called "Stereo Microphone". Both are gone,
+and `tools/test-capture.mjs` fails if either comes back.
 
 **Changing output device** — plugging in headphones, switching the default — is handled
 automatically. It has to be: a loopback stream orphaned by a device switch doesn't error

@@ -53,6 +53,7 @@ foreground, so the keystrokes land in whatever app is actually in front.
 | `tools/nowplaying.ps1` | SMTC + WASAPI watcher, spawned as a child of main |
 | `tools/make-icon.js` | Generates `assets/icon.png` + `icon.ico` (pure Node) |
 | `tools/test-analysis.mjs` | `npm test` — spectrum balance, run headless |
+| `tools/test-capture.mjs` | `npm test` — the capture chain's microphone contract |
 
 Mode changes **recreate** the BrowserWindow (`createWindow`) rather than mutating it —
 window flags like `transparent` and `focusable` can't be changed after creation.
@@ -68,6 +69,15 @@ window flags like `transparent` and `focusable` can't be changed after creation.
   (the clamp no longer applies to a child window) and then repositions natively.
 - **Never connect the analyser to `ctx.destination`** in `audio.js` — it echoes the
   desktop audio back out of the speakers.
+- **Never open an input device unless `allowMicInput` is on.** WASAPI loopback is a
+  render-endpoint capture and costs nothing privacy-wise; anything reached through
+  `getUserMedia` is microphone use as far as Windows is concerned, Stereo Mix included.
+  This regressed once: `_stereoMix()` called `getUserMedia({audio: true})` — the default
+  mic — purely to unlock device labels, and `_scheduleRestart` re-ran it on every
+  `devicechange`, so joining a meeting or plugging in a headset silently grabbed the mic
+  and put the app in contention with the meeting client. `main.js` used to blanket-grant
+  `'media'`, which hid it completely. `tools/test-capture.mjs` locks the contract down;
+  if you touch the capture chain, run it.
 - **`getDisplayMedia` needs `video: true`** even though we only want audio; the video
   track is stopped and removed immediately in `AudioEngine._attach`.
 - **koffi is an optional dependency.** `native/wallpaper.js` must keep degrading

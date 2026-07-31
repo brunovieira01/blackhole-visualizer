@@ -65,12 +65,16 @@ export class AudioEngine {
 
   /**
    * @param {object}   opts
-   * @param {boolean}  opts.forceDemo  skip capture, use the synthetic signal
-   * @param {Function} opts.onSource   called with the mode whenever capture is
-   *                                   (re-)acquired, so the UI can update
+   * @param {boolean}  opts.forceDemo      skip capture, use the synthetic signal
+   * @param {boolean}  opts.allowMicInput  opt in to capture *input* devices
+   *                                       (Stereo Mix, microphone). Off by
+   *                                       default — see _open().
+   * @param {Function} opts.onSource       called with the mode whenever capture
+   *                                       is (re-)acquired, so the UI can update
    */
-  async start({ forceDemo = false, onSource = null } = {}) {
+  async start({ forceDemo = false, allowMicInput = false, onSource = null } = {}) {
     this._forceDemo = forceDemo;
+    this._allowMicInput = allowMicInput;
     this.onSource = onSource;
 
     // Switching output device (speakers -> headphones, or a new default) does
@@ -89,16 +93,27 @@ export class AudioEngine {
       return 'demo';
     }
 
+    // WASAPI loopback is a *render* endpoint capture: Windows does not treat it
+    // as microphone access, nothing lights the mic-in-use indicator, and no
+    // other app loses the device. It is the only source we use by default.
     const attempts = [
       ['loopback', () => navigator.mediaDevices.getDisplayMedia({
         video: true,
         audio: { autoGainControl: false, echoCancellation: false, noiseSuppression: false },
       })],
-      ['stereo-mix', () => this._stereoMix()],
-      ['microphone', () => navigator.mediaDevices.getUserMedia({
-        audio: { autoGainControl: false, echoCancellation: false, noiseSuppression: false },
-      })],
     ];
+
+    // Everything below opens an *input* device, which Windows counts as
+    // microphone use no matter how loopback-ish the device's name is. This is
+    // a visualiser for what comes out of the speakers, so it stays opt-in:
+    // silently grabbing the mic put the visualiser in contention with meeting
+    // apps every time capture was re-acquired. Enable it in the tray menu.
+    if (this._allowMicInput) {
+      attempts.push(['stereo-mix', () => this._stereoMix()]);
+      attempts.push(['microphone', () => navigator.mediaDevices.getUserMedia({
+        audio: { autoGainControl: false, echoCancellation: false, noiseSuppression: false },
+      })]);
+    }
 
     for (const [mode, get] of attempts) {
       try {
@@ -152,13 +167,24 @@ export class AudioEngine {
     this.source = null;
   }
 
+  // Matches only devices that are unambiguously a render-loopback mix. The
+  // previous pattern included a bare /st[ée]r[ée]o/, which happily matched a
+  // headset called "Stereo Microphone" — exactly the device we must not take.
+  static LOOPBACK_DEVICE =
+    /\bstereo ?mix\b|\bwhat u hear\b|\bwave ?out( mix)?\b|\bloopback\b|mixagem est[ée]reo|mezcla est[ée]reo|missaggio stereo|st[ée]r[ée]o mix/i;
+
   async _stereoMix() {
-    // Needs a one-off getUserMedia to unlock device labels.
-    await navigator.mediaDevices.getUserMedia({ audio: true }).then(
-      (s) => s.getTracks().forEach((t) => t.stop()), () => {});
+    // Device labels are only populated once a capture permission has been
+    // granted. We deliberately do NOT call getUserMedia({audio:true}) to unlock
+    // them: that opens the *default* microphone, and it ran on every re-acquire
+    // — including the devicechange that fires when you join a meeting. If the
+    // labels aren't already available we skip this source rather than probing.
     const devices = await navigator.mediaDevices.enumerateDevices();
-    const re = /stereo mix|what u hear|wave out|loopback|mixagem est|misturagem|st[ée]r[ée]o/i;
-    const dev = devices.find((d) => d.kind === 'audioinput' && re.test(d.label));
+    const inputs = devices.filter((d) => d.kind === 'audioinput');
+    if (!inputs.some((d) => d.label)) {
+      throw new Error('device labels unavailable, and probing for them would open the microphone');
+    }
+    const dev = inputs.find((d) => AudioEngine.LOOPBACK_DEVICE.test(d.label));
     if (!dev) throw new Error('no loopback-style input device found');
     return navigator.mediaDevices.getUserMedia({ audio: { deviceId: { exact: dev.deviceId } } });
   }

@@ -59,6 +59,11 @@ const DEFAULTS = {
   // beat-driven camera motion did. ~6 minutes for a full revolution.
   autoOrbit: 0.018,
   showNowPlaying: true,
+  // Off by default, and it should stay that way: WASAPI loopback already hears
+  // everything the speakers play without touching an input device. Turning this
+  // on lets the visualiser fall back to Stereo Mix or the microphone, which
+  // Windows counts as microphone use and which meeting apps compete for.
+  allowMicInput: false,
   allMonitors: false,
   idleThrottle: true,
   launchAtLogin: false,
@@ -585,6 +590,13 @@ function buildTray() {
       checked: config.idleThrottle,
       click: (i) => setConfig({ idleThrottle: i.checked }),
     },
+    {
+      // Only worth enabling if loopback genuinely doesn't work on this machine.
+      label: 'Allow microphone input (off by default)',
+      type: 'checkbox',
+      checked: config.allowMicInput,
+      click: (i) => setConfig({ allowMicInput: i.checked }, { recreate: true }),
+    },
     { type: 'separator' },
     {
       label: 'Start with Windows',
@@ -620,10 +632,29 @@ function setupCapture() {
     }
   }, { useSystemPicker: false });
 
-  s.setPermissionRequestHandler((_wc, permission, cb) => {
-    cb(['media', 'display-capture', 'audioCapture'].includes(permission));
+  // Loopback arrives via display-capture, never via the microphone permission.
+  // Blanket-granting 'media' meant any stray getUserMedia opened the mic
+  // without a trace, so each class is decided on its own merits here.
+  const allow = (permission, mediaTypes = []) => {
+    if (permission === 'display-capture') return true;
+    if (permission === 'media') {
+      if (mediaTypes.includes('video')) return false;      // never the camera
+      if (mediaTypes.includes('audio')) return config.allowMicInput === true;
+      return true;                                          // loopback's own request
+    }
+    return false;
+  };
+
+  s.setPermissionRequestHandler((_wc, permission, cb, details) => {
+    const ok = allow(permission, details?.mediaTypes || []);
+    if (!ok) console.warn('[capture] denied permission:', permission, details?.mediaTypes || '');
+    cb(ok);
   });
-  s.setPermissionCheckHandler(() => true);
+
+  s.setPermissionCheckHandler((_wc, permission, _origin, details) => {
+    const types = details?.mediaType && details.mediaType !== 'unknown' ? [details.mediaType] : [];
+    return allow(permission, types);
+  });
 }
 
 // ---------------------------------------------------------------------------

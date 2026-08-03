@@ -75,6 +75,10 @@ Play/pause, previous and next are wired straight through to the same media sessi
 they drive Spotify, YouTube, VLC — whatever currently holds it. Clicking the progress bar
 seeks, where the app supports it.
 
+Below the transport is the **system volume** — the same master level the taskbar speaker
+drives, read and set through `IAudioEndpointVolume`. Click the bar to set it, the speaker
+to mute. It's in the tray as well, under the audio source.
+
 The buttons work in every mode, including as the wallpaper — see
 [Clicking a wallpaper](#clicking-a-wallpaper) for why that takes any effort at all.
 
@@ -103,10 +107,27 @@ both against their terms and permanently one deploy away from breaking. LRCLIB m
 exactly what the Windows media session already gives us — artist, title, album and
 duration — and it works for any player, not just Spotify.
 
-The timing is done locally against the playback clock rather than from the once-a-second
-position updates, so lines land on the beat. Unsynced lyrics, where that's all that
-exists, are shown as a single static block. Nothing to sign into, and `L` or the tray
-turns it off.
+**Timed lyrics only.** An unsynced upload is the entire text of the song with nothing to
+say about when any of it happens; on screen that's a wall of words that never changes and
+never matches what you're hearing, so it isn't shown at all. A candidate whose length
+differs from the track by more than five seconds is rejected too — it's a different
+master, and words that drift a few seconds off are worse than no words.
+
+Three things go into getting the timing right:
+
+- The **`[offset:]` tag** in the LRC file is honoured. It's part of the format and often
+  non-zero — it's how a file corrects for a lead-in that doesn't match the master it was
+  timed against — and ignoring it shifts the whole song.
+- The **playback clock is smoothed, not reset.** The watcher reports a position about
+  once a second and many players round it to whole seconds; adopting each reading whole
+  makes lines stutter and land up to a second late. Small disagreements are eased out
+  and only a real jump (a seek, a track change) resyncs hard.
+- **Lyrics timing** in the tray shifts everything earlier or later, because how far ahead
+  a line should appear is taste and player latency varies. The default shows each line a
+  quarter-second early, which is what karaoke does — you want to read it just before it's
+  sung.
+
+Nothing to sign into, and `L` or the tray turns it off.
 
 ---
 
@@ -152,6 +173,11 @@ shrink and dim as they pass behind.
 - Icons are resolved through the shortcut to the **target's** icon, because
   `getFileIcon()` on a `.lnk` hands back the generic shortcut glyph more often than not,
   and a desktop full of blank pages is not much of a launcher.
+- They're then **tinted to the theme**, because a desktop's worth of app logos is a
+  scatter of unrelated brand colours that reads as a toolbar rather than as bodies in
+  orbit. Hovering one shows its true colours. Off in the tray if you'd rather.
+- The ring **lifts clear of the lyrics** when they're on screen, measuring the block
+  rather than assuming a height, and it squashes symmetrically so it stays an ellipse.
 - Size and speed are in the tray; **Still** parks the ring if you'd rather it didn't move.
 
 By default it also **hides the real desktop icons**, since having both is just clutter.
@@ -385,9 +411,10 @@ src/renderer.js         WebGL2 pipeline and render targets
 src/audio.js            Loopback capture, per-bin normalisation, onset detection
 src/orbit.js            The orbiting launcher: layout, hit-testing, both input paths
 src/app.js              Bootstrap, adaptive quality, now-playing panel, lyrics, input
-tools/nowplaying.ps1    Media session (SMTC) + WASAPI session watcher
+tools/nowplaying.ps1    Media session (SMTC) + WASAPI + endpoint volume watcher
 tools/fake-track.js     A silent but completely real media session, for testing
 tools/probe-desktop.js  Read-only diagnostics for the shell's desktop layer
+tools/shot-wallpaper.js PrintWindow capture of the live wallpaper, covered or not
 tools/make-icon.js      Draws assets/icon.png + icon.ico from scratch
 tools/test-analysis.mjs Asserts the spectrum stays balanced (npm test)
 tools/test-capture.mjs  Pins the capture chain's microphone contract (npm test)

@@ -89,6 +89,78 @@ namespace BHV {
     int GetPeakValue(out float peak);
   }
 
+  // Master volume of the default render endpoint - the same thing the taskbar
+  // speaker slider drives. Every method up to GetMute has to be declared even
+  // though most are unused: this is a vtable, and a missing entry silently
+  // shifts every call after it.
+  [ComImport, Guid("5CDF2C82-841E-4546-9722-0CF74078229A"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+  public interface IAudioEndpointVolume {
+    int RegisterControlChangeNotify(IntPtr notify);
+    int UnregisterControlChangeNotify(IntPtr notify);
+    int GetChannelCount(out uint count);
+    int SetMasterVolumeLevel(float levelDb, IntPtr ctx);
+    int SetMasterVolumeLevelScalar(float level, IntPtr ctx);
+    int GetMasterVolumeLevel(out float levelDb);
+    int GetMasterVolumeLevelScalar(out float level);
+    int SetChannelVolumeLevel(uint channel, float levelDb, IntPtr ctx);
+    int SetChannelVolumeLevelScalar(uint channel, float level, IntPtr ctx);
+    int GetChannelVolumeLevel(uint channel, out float levelDb);
+    int GetChannelVolumeLevelScalar(uint channel, out float level);
+    int SetMute([MarshalAs(UnmanagedType.Bool)] bool mute, IntPtr ctx);
+    int GetMute([MarshalAs(UnmanagedType.Bool)] out bool mute);
+  }
+
+  public class Volume {
+    // Deliberately not cached: the default endpoint changes when headphones go
+    // in, and a cached pointer would quietly keep driving the old device.
+    static IAudioEndpointVolume Endpoint() {
+      var en = (IMMDeviceEnumerator)(new MMDeviceEnumerator());
+      IMMDevice dev;
+      if (en.GetDefaultAudioEndpoint(0, 0, out dev) != 0) return null;
+      Guid iid = typeof(IAudioEndpointVolume).GUID;
+      object o;
+      if (dev.Activate(ref iid, 23, IntPtr.Zero, out o) != 0) return null;
+      return o as IAudioEndpointVolume;
+    }
+
+    /// 0..1, or -1 when there is no usable endpoint.
+    public static float Level() {
+      try {
+        var v = Endpoint();
+        if (v == null) return -1f;
+        float f;
+        return v.GetMasterVolumeLevelScalar(out f) == 0 ? f : -1f;
+      } catch { return -1f; }
+    }
+
+    /// 1 muted, 0 not, -1 unknown.
+    public static int Muted() {
+      try {
+        var v = Endpoint();
+        if (v == null) return -1;
+        bool m;
+        return v.GetMute(out m) == 0 ? (m ? 1 : 0) : -1;
+      } catch { return -1; }
+    }
+
+    public static void SetLevel(float level) {
+      try {
+        var v = Endpoint();
+        if (v == null) return;
+        if (level < 0f) level = 0f;
+        if (level > 1f) level = 1f;
+        v.SetMasterVolumeLevelScalar(level, IntPtr.Zero);
+      } catch { }
+    }
+
+    public static void SetMuted(bool mute) {
+      try {
+        var v = Endpoint();
+        if (v != null) v.SetMute(mute, IntPtr.Zero);
+      } catch { }
+    }
+  }
+
   public class Sessions {
     // Process id of the loudest active render session, or 0. The peak level is
     // returned too so the caller can tell "playing" from "merely open".
@@ -225,6 +297,22 @@ function Get-ProcessName([int]$procId) {
 }
 
 # ---- transport commands ----------------------------------------------------
+# Numbers on the wire are always invariant ("12.5"), because that is what
+# JavaScript produces. [double]::TryParse defaults to the *current* culture, so
+# on a pt-BR / de-DE / fr-FR machine "123.45" parses as 12345 - which turned a
+# seek into a position past the end of the track, and the player answered by
+# skipping to the next song. Returns -1 when the text is not a number.
+function Parse-Number([string]$text) {
+  $v = 0.0
+  $ok = [double]::TryParse(
+    $text,
+    [System.Globalization.NumberStyles]::Float,
+    [System.Globalization.CultureInfo]::InvariantCulture,
+    [ref]$v)
+  if ($ok) { return $v }
+  return -1.0
+}
+
 function Invoke-MediaCommand([string]$line) {
   if ([string]::IsNullOrWhiteSpace($line)) { return }
   $parts = $line.Trim().Split(' ')
@@ -243,12 +331,24 @@ function Invoke-MediaCommand([string]$line) {
       'prev'      { $null = Await ($s.TrySkipPreviousAsync()) ([bool]) }
       'seek' {
         if ($parts.Count -gt 1) {
-          $secs = 0.0
-          if ([double]::TryParse($parts[1], [ref]$secs)) {
+          $secs = Parse-Number $parts[1]
+          if ($secs -ge 0) {
             # TryChangePlaybackPositionAsync takes 100-nanosecond ticks
             $null = Await ($s.TryChangePlaybackPositionAsync([long]($secs * 10000000))) ([bool])
           }
         }
+      }
+      'volume' {
+        if ($parts.Count -gt 1) {
+          $lvl = Parse-Number $parts[1]
+          if ($lvl -ge 0) { [BHV.Volume]::SetLevel([float]$lvl) }
+        }
+      }
+      'mute'   { [BHV.Volume]::SetMuted($true) }
+      'unmute' { [BHV.Volume]::SetMuted($false) }
+      'togglemute' {
+        $m = [BHV.Volume]::Muted()
+        if ($m -ge 0) { [BHV.Volume]::SetMuted(($m -eq 0)) }
       }
     }
   } catch {
@@ -379,6 +479,12 @@ while ($true) {
   } elseif ($null -ne $media -and $media.title) {
     $state = $media                        # paused track: still worth showing
   }
+
+  # System volume rides along on every message, whatever is playing (or isn't),
+  # so the panel and the tray always have a current reading.
+  $vol = [BHV.Volume]::Level()
+  $state.volume = if ($vol -ge 0) { [Math]::Round([double]$vol, 3) } else { -1 }
+  $state.muted = ([BHV.Volume]::Muted() -eq 1)
 
   $json = ConvertTo-Json $state -Compress
   if ($json -ne $last) {

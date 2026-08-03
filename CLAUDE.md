@@ -18,9 +18,12 @@ screen: it waits 4s for the audio and shaders to settle, calls `capturePage()`, 
 the PNG, and quits. Pair it with `--demo-audio` to exercise the reactive elements
 (spectrum ring, waveform, beat kick) deterministically instead of waiting for silence.
 
-To verify **wallpaper** mode without disturbing the desktop, render the WorkerW host
-window offscreen with `PrintWindow(hwnd, dc, PW_RENDERFULLCONTENT)` — the host HWND is
-printed to stdout on attach.
+To verify **wallpaper** mode without disturbing the desktop, run
+`node tools/shot-wallpaper.js out.png`. It walks the desktop's windows, renders each with
+`PrintWindow(hwnd, dc, PW_RENDERFULLCONTENT)` and keeps whichever actually painted, so it
+captures the live wallpaper even when it is completely covered — and it neither steals
+focus nor moves the cursor, which matters when the person whose desktop it is happens to
+be using it. Prefer it to a screen grab.
 
 ### Testing the media controls
 
@@ -118,15 +121,40 @@ window flags like `transparent` and `focusable` can't be changed after creation.
   starting renderer reliably beats it; without the await the orbit comes up empty and
   stays that way until the desktop next changes. Broadcasting alone doesn't fix it — the
   broadcast can land before the renderer has registered its listener.
+- **Tint the launcher icons with filters, not a mask.** Masking uses the alpha channel
+  and plenty of shell icons are opaque squares, which would become featureless blocks.
+  `grayscale + sepia` lays down a known hue for `hue-rotate` to aim at `--accent-hue`
+  while the luminance detail that makes an icon recognisable survives.
+- **The audio COM interfaces are vtables.** `IAudioEndpointVolume` declares every method
+  up to `GetMute` even though most are unused — deleting one silently shifts every call
+  after it, same trap as the session interfaces above.
 - **Space the orbit by arc length, not by angle.** The ellipse is deliberately flat, so
   equal angles bunch bodies at the left and right extremes — exactly where the labels are
   widest. `phase` is a fraction of a lap, not an angle, so speed is constant too.
 - **`_hit` must track `.body-disc`.** The hit radius (30 px) is the CSS disc radius; it is
   scaled by `s` only, never by `this.scale`, which grows the *ring* and not the bodies.
+- **Numbers on the wire to `nowplaying.ps1` are invariant, and it must parse them that
+  way.** `[double]::TryParse` defaults to the *current* culture: on this machine (pt-BR)
+  `"123.45"` parsed as **12345**, so clicking the progress bar seeked past the end of the
+  track and the player answered by skipping to the next song. `Parse-Number` pins
+  `InvariantCulture`; the `ipcMain.on('media')` guard only accepts `.`-decimals to match.
+  Any new numeric command goes through both.
 - **Lyrics timing is done in the renderer**, against the same locally-advanced clock the
   progress bar uses. Driving it from the watcher's once-a-second position would visibly
   lag. `refreshLyrics()` is keyed on track *identity*, not on the `changed` flag, so
   pausing doesn't throw the lyrics away and re-fetch on resume.
+- **Don't hard-reset the playback clock on every message.** It looks like the obvious
+  thing and it's wrong: the watcher reports about once a second and many players round
+  the position to whole seconds, so adopting each reading whole makes the lyrics stutter
+  and sit up to a second late. `syncClock()` eases out small disagreements and only
+  resyncs hard on a real jump (>1.5 s, a play/pause flip, or a new duration).
+- **Only synced lyrics are ever displayed.** `lib/lyrics.js` will not return a plain-text
+  match at all. An unsynced upload is the whole song with no timings — on screen that's a
+  static wall of words over the visuals. The duration tolerance is deliberately tight
+  (5 s): a longer match is a different master, and lyrics drifting a few seconds off are
+  worse than none. Both are what "the lyrics are wrong" turned out to mean.
+- **`[offset:]` in an LRC is real and must be applied.** Positive shifts lines *earlier*.
+  It was being silently dropped, which shifts a whole song.
 - **LRCLIB intermittently answers a good query with nothing.** `lyrics.js` therefore only
   caches a negative when the search actually returned candidates and they were rejected;
   an empty or failed response is not cached, and `main.js` retries once after 4 s. Don't

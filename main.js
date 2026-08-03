@@ -80,6 +80,14 @@ const DEFAULTS = {
   orbitScale: 1.0,
 
   showLyrics: true,
+  // Seconds to shift the lyrics by. Negative shows each line early, which is
+  // what karaoke does — you want to read it just before it's sung. Player and
+  // pipeline latency varies, so this is a dial rather than a constant.
+  lyricsOffset: -0.25,
+
+  // Flatten every launcher icon to one colour so a desktop full of loud app
+  // logos reads as bodies in orbit rather than a scattered toolbar.
+  orbitTintIcons: true,
 };
 
 // --demo-audio: ignore capture and drive the visuals from a synthetic beat.
@@ -673,6 +681,20 @@ function radio(list, current, onPick) {
   }));
 }
 
+const VOLUME_STEPS = [0, 0.1, 0.25, 0.5, 0.75, 1];
+
+function volumeLabel() {
+  if (!(nowPlaying.volume >= 0)) return 'unavailable';
+  const pct = Math.round(nowPlaying.volume * 100) + '%';
+  return nowPlaying.muted ? `${pct}, muted` : pct;
+}
+
+function nearestVolumeStep() {
+  if (!(nowPlaying.volume >= 0)) return null;
+  return VOLUME_STEPS.reduce((best, v) =>
+    Math.abs(v - nowPlaying.volume) < Math.abs(best - nowPlaying.volume) ? v : best);
+}
+
 function buildTray() {
   if (!tray) {
     tray = new Tray(iconImage(20));
@@ -692,6 +714,26 @@ function buildTray() {
     { label: `Black Hole Visualizer`, enabled: false },
     { label: `  ${nowPlayingLabel()}`, enabled: false },
     { label: `  audio: ${audioSource}`, enabled: false },
+    {
+      label: `Volume  (${volumeLabel()})`,
+      submenu: [
+        {
+          label: nowPlaying.muted ? 'Unmute' : 'Mute',
+          type: 'checkbox',
+          checked: !!nowPlaying.muted,
+          click: () => mediaCommand(nowPlaying.muted ? 'unmute' : 'mute'),
+        },
+        { type: 'separator' },
+        ...VOLUME_STEPS.map((v) => ({
+          label: `${Math.round(v * 100)}%`,
+          type: 'radio',
+          // Nearest step wins, so the dot lands somewhere sensible whatever
+          // the level actually is.
+          checked: nearestVolumeStep() === v,
+          click: () => mediaCommand(`volume ${v.toFixed(3)}`),
+        })),
+      ],
+    },
     { type: 'separator' },
     // Transport lives here because in wallpaper mode the visualiser is behind
     // the desktop icon layer and can never receive a click.
@@ -790,10 +832,26 @@ function buildTray() {
       click: (i) => setConfig({ showNowPlaying: i.checked }),
     },
     {
-      label: 'Show lyrics',
-      type: 'checkbox',
-      checked: config.showLyrics,
-      click: (i) => setConfig({ showLyrics: i.checked }),
+      label: 'Lyrics',
+      submenu: [
+        {
+          label: 'Show lyrics',
+          type: 'checkbox',
+          checked: config.showLyrics,
+          click: (i) => setConfig({ showLyrics: i.checked }),
+        },
+        { type: 'separator' },
+        { label: 'Timing', enabled: false },
+        // Only ever synced lyrics are shown, but how early a line should
+        // appear is taste, and player latency varies. Negative is earlier.
+        ...radio([
+          [-1.0, 'Much earlier  (1s)'],
+          [-0.5, 'Earlier  (0.5s)'],
+          [-0.25, 'Slightly early  (default)'],
+          [0, 'On the timestamp'],
+          [0.5, 'Later  (0.5s)'],
+        ], config.lyricsOffset, (v) => setConfig({ lyricsOffset: v })),
+      ],
     },
     {
       label: 'Orbit launcher',
@@ -810,6 +868,13 @@ function buildTray() {
           checked: config.orbitHideIcons,
           enabled: config.orbitLauncher,
           click: (i) => setConfig({ orbitHideIcons: i.checked }),
+        },
+        {
+          label: 'Tint icons to the theme',
+          type: 'checkbox',
+          checked: config.orbitTintIcons,
+          enabled: config.orbitLauncher,
+          click: (i) => setConfig({ orbitTintIcons: i.checked }),
         },
         { type: 'separator' },
         {
@@ -953,7 +1018,8 @@ function startNowPlaying() {
         // The position field changes every second; only rebuild the tray when
         // the *identity* of what's playing changes, or we'd churn the menu.
         const key = (o) => `${o.kind}|${o.title}|${o.artist}|${o.app}|${o.status}` +
-          `|${o.canNext}|${o.canPrev}|${o.canPlay}|${o.canPause}`;
+          `|${o.canNext}|${o.canPrev}|${o.canPlay}|${o.canPause}` +
+          `|${Math.round((o.volume ?? -1) * 100)}|${o.muted}`;
         const changed = key(next) !== key(nowPlaying);
         nowPlaying = next;
         for (const w of allWindows()) w.webContents.send('nowplaying', nowPlaying);
@@ -1046,8 +1112,8 @@ function lookupLyrics(id, track, mayRetry) {
     // The song can change while the request is in flight.
     if (ctrl !== lyricsAbort) return;
     lyricsAbort = null;
-    lyrics = res && (res.synced?.length || res.plain)
-      ? { lines: res.synced, plain: res.plain, source: res.source, track: id }
+    lyrics = res && res.synced?.length
+      ? { lines: res.synced, source: res.source, track: id }
       : null;
 
     // LRCLIB intermittently answers a perfectly good query with nothing at
@@ -1061,8 +1127,7 @@ function lookupLyrics(id, track, mayRetry) {
     }
 
     console.log('[lyrics]', track.title, '-',
-      lyrics ? `${lyrics.lines ? lyrics.lines.length + ' synced lines' : 'unsynced'} from ${lyrics.source}`
-        : 'no match');
+      lyrics ? `${lyrics.lines.length} timed lines from ${lyrics.source}` : 'no timed lyrics');
     broadcast('lyrics', lyrics);
   }).catch((err) => {
     if (err.name !== 'AbortError') console.warn('[lyrics]', err.message);
@@ -1110,7 +1175,10 @@ function setupIpc() {
     if (key in DEFAULTS) setConfig({ [key]: value });
   });
   ipcMain.on('media', (_e, cmd) => {
-    if (/^(play|pause|playpause|next|prev|seek(\s+\d+(\.\d+)?)?)$/.test(String(cmd))) {
+    // Numbers are matched as invariant decimals on purpose — that is what the
+    // watcher parses, and what a comma-decimal locale must not produce.
+    if (/^(play|pause|playpause|next|prev|mute|unmute|togglemute|(seek|volume)\s+\d+(\.\d+)?)$/
+      .test(String(cmd))) {
       mediaCommand(String(cmd));
     }
   });

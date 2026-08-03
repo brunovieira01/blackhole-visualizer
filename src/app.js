@@ -35,6 +35,10 @@ const np = {
   fill: document.getElementById('np-fill'),
   transport: document.getElementById('np-transport'),
   ppIcon: document.getElementById('np-pp-icon'),
+  volume: document.getElementById('np-volume'),
+  mute: document.getElementById('np-mute'),
+  volTrack: document.getElementById('np-vol-track'),
+  volFill: document.getElementById('np-vol-fill'),
 };
 
 const lyricEls = {
@@ -48,8 +52,43 @@ const ICON_PLAY = 'M8 5l11 7-11 7z';
 const ICON_PAUSE = 'M8 5v14M16 5v14';
 
 // Position is only refreshed about once a second, so we advance it locally
-// between updates and re-sync on every message.
-const clock = { base: 0, at: 0, duration: 0, playing: false };
+// between updates and re-sync against each message.
+const clock = { base: 0, at: 0, duration: 0, playing: false, reported: null };
+
+function playbackTime() {
+  const t = clock.base + (clock.playing ? (performance.now() - clock.at) / 1000 : 0);
+  if (!(clock.duration > 0)) return Math.max(0, t);
+  return Math.max(0, Math.min(clock.duration, t));
+}
+
+// A reading that disagrees with us by more than this is a real move — a seek,
+// a track change, a stall — rather than measurement noise.
+const RESYNC_HARD = 1.5;
+
+// Hard-resetting the clock on every message looks obvious but is wrong: the
+// watcher reports about once a second and many players quantise the position
+// to whole seconds, so the lyrics end up stuttering and sitting up to a second
+// late. Small disagreements are eased out instead, which keeps the long-term
+// accuracy of the reported position without inheriting its granularity.
+function syncClock(position, playing, duration) {
+  const now = performance.now();
+  const wasPlaying = clock.playing;
+  const hadDuration = clock.duration > 0;
+
+  clock.duration = duration;
+  clock.playing = playing;
+  clock.reported = position;
+
+  if (!(duration > 0)) { clock.base = 0; clock.at = now; return; }
+
+  const predicted = clock.base + (wasPlaying ? (now - clock.at) / 1000 : 0);
+  const drift = position - predicted;
+
+  clock.base = (!hadDuration || playing !== wasPlaying || Math.abs(drift) > RESYNC_HARD)
+    ? position
+    : predicted + drift * 0.15;
+  clock.at = now;
+}
 
 function fmtTime(s) {
   if (!isFinite(s) || s < 0) s = 0;
@@ -129,10 +168,13 @@ function renderNowPlaying() {
 
   // ---- timeline ----
   const dur = isMedia ? (info.duration || 0) : 0;
-  clock.duration = dur;
-  clock.base = isMedia ? (info.position || 0) : 0;
-  clock.at = performance.now();
-  clock.playing = info.status === 'Playing';
+  const pos = isMedia ? (info.position || 0) : 0;
+  // Only resync on an actual new reading. This runs again whenever settings
+  // change, and re-applying a stale position would drag the clock backwards.
+  if (pos !== clock.reported || dur !== clock.duration ||
+      (info.status === 'Playing') !== clock.playing) {
+    syncClock(pos, info.status === 'Playing', dur);
+  }
   np.progress.style.display = dur > 0 ? '' : 'none';
   if (dur > 0) {
     np.total.textContent = fmtTime(dur);
@@ -149,13 +191,58 @@ function renderNowPlaying() {
   setEnabled('prev', info.canPrev);
   setEnabled('next', info.canNext);
   setEnabled('playpause', info.canPlay || info.canPause);
+
+  renderVolume(info);
+}
+
+// ---------------------------------------------------------------------------
+//  Volume — the system master level, the same one the taskbar speaker drives.
+//
+//  Held optimistically: the watcher only reports once a second, and a slider
+//  that snaps back for that long after every click feels broken.
+// ---------------------------------------------------------------------------
+const vol = { level: -1, muted: false, until: 0 };
+
+function renderVolume(info) {
+  const known = info && typeof info.volume === 'number' && info.volume >= 0;
+  np.volume.style.display = known || vol.level >= 0 ? '' : 'none';
+  if (!known && vol.level < 0) return;
+
+  // Ignore incoming readings for a moment after a local change, or the value
+  // visibly bounces back to the old one before the new one is picked up.
+  if (known && performance.now() >= vol.until) {
+    vol.level = info.volume;
+    vol.muted = !!info.muted;
+  }
+
+  const pct = Math.round(Math.max(0, Math.min(1, vol.level)) * 100);
+  np.volFill.style.width = pct + '%';
+  np.volume.classList.toggle('muted', vol.muted);
+  np.volume.classList.toggle('vol-0', !vol.muted && pct === 0);
+  np.volume.classList.toggle('vol-1', !vol.muted && pct > 0 && pct < 55);
+  np.mute.setAttribute('aria-label', vol.muted ? 'Unmute' : 'Mute');
+}
+
+function setVolumeFraction(frac) {
+  const v = Math.max(0, Math.min(1, frac));
+  bridge?.media(`volume ${v.toFixed(3)}`);
+  vol.level = v;
+  // Setting the level on a muted device is meant as "make it this loud".
+  if (vol.muted) { bridge?.media('unmute'); vol.muted = false; }
+  vol.until = performance.now() + 900;
+  renderVolume(null);
+}
+
+function toggleMute() {
+  bridge?.media('togglemute');
+  vol.muted = !vol.muted;
+  vol.until = performance.now() + 900;
+  renderVolume(null);
 }
 
 function tickProgress() {
   if (!(clock.duration > 0)) return;
-  const t = Math.min(
-    clock.duration,
-    clock.base + (clock.playing ? (performance.now() - clock.at) / 1000 : 0));
+  const t = playbackTime();
   np.fill.style.width = ((t / clock.duration) * 100).toFixed(2) + '%';
   np.elapsed.textContent = fmtTime(t);
 }
@@ -167,10 +254,19 @@ function tickProgress() {
 //  here against the same locally-advanced playback clock the progress bar
 //  uses, so the line changes on the beat rather than once a second.
 // ---------------------------------------------------------------------------
-const lyricState = { data: null, index: -2, lastT: 0 };
+const lyricState = { data: null, index: -2, lastT: 0, on: null };
+
+// How much of the bottom of the screen the lyric block is occupying. Measured
+// only when the text actually changes: renderLyrics runs every frame, and
+// getBoundingClientRect() forces a layout each time it's called.
+function measureLyricSpace() {
+  if (!lyricState.on) { orbit?.setReserveBottom(0); return; }
+  const top = lyricEls.root.getBoundingClientRect().top;
+  orbit?.setReserveBottom(Math.max(0, window.innerHeight - top + 24));
+}
 
 function setLyrics(data) {
-  lyricState.data = data && (data.lines?.length || data.plain) ? data : null;
+  lyricState.data = data && data.lines?.length ? data : null;
   lyricState.index = -2;
   lyricState.lastT = 0;
   lyricEls.prev.textContent = '';
@@ -184,19 +280,15 @@ function renderLyrics() {
   const on = (settings.showLyrics ?? true) && !!d &&
     nowPlaying && nowPlaying.kind === 'media';
 
-  lyricEls.root.classList.toggle('on', on);
+  if (on !== lyricState.on) {
+    lyricState.on = on;
+    lyricEls.root.classList.toggle('on', on);
+    measureLyricSpace();
+  }
   if (!on) return;
 
-  // No timings — show the plain text as one static block and leave it alone.
-  const synced = d.lines && d.lines.length > 0;
-  lyricEls.root.classList.toggle('plain', !synced);
-  if (!synced) {
-    if (lyricEls.cur.textContent !== d.plain) lyricEls.cur.textContent = d.plain;
-    return;
-  }
-
   const lines = d.lines;
-  const t = clock.base + (clock.playing ? (performance.now() - clock.at) / 1000 : 0);
+  const t = playbackTime() - (settings.lyricsOffset ?? 0);
 
   // A seek (or a new track) can move time backwards; the cached index is only
   // a valid starting point when time moved forward.
@@ -212,6 +304,10 @@ function renderLyrics() {
   lyricEls.prev.textContent = i > 0 ? lines[i - 1].text : '';
   lyricEls.cur.textContent = i >= 0 ? lines[i].text : '';
   lyricEls.next.textContent = i + 1 < lines.length ? lines[i + 1].text : '';
+
+  // The block's height changes with the wrapping, so re-measure on the only
+  // frames where it can have changed.
+  measureLyricSpace();
 }
 
 // Theme colours are HDR (components above 1.0), so normalise against the
@@ -220,6 +316,22 @@ function applyAccent(hot) {
   const m = Math.max(hot[0], hot[1], hot[2], 1e-6);
   const rgb = hot.map((c) => Math.round(Math.min(255, 90 + (c / m) * 165)));
   document.documentElement.style.setProperty('--accent', rgb.join(', '));
+  // The launcher's icon tint aims a hue-rotate at the accent, so it needs the
+  // hue on its own rather than as a colour.
+  document.documentElement.style.setProperty('--accent-hue', String(hueOf(rgb)));
+}
+
+function hueOf([r, g, b]) {
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  const c = max - min;
+  if (c === 0) return 0;
+  let h;
+  if (max === r) h = ((g - b) / c) % 6;
+  else if (max === g) h = (b - r) / c + 2;
+  else h = (r - g) / c + 4;
+  h *= 60;
+  return h < 0 ? h + 360 : h;
 }
 
 // ---------------------------------------------------------------------------
@@ -248,6 +360,7 @@ function applySettings(s) {
     enabled: !!settings.orbitLauncher,
     speed: settings.orbitSpeed ?? 1.0,
     scale: settings.orbitScale ?? 1.0,
+    tint: settings.orbitTintIcons !== false,
   });
 
   applyAccent(theme.hot);
@@ -314,17 +427,25 @@ function runCommand(cmd) {
   bridge?.media(cmd);
   // Flip the glyph immediately; the watcher confirms within a second.
   if (cmd === 'playpause') {
-    clock.playing = !clock.playing;
+    // Bank the time accrued so far before flipping, or a pause/resume would
+    // rewind to wherever the last message left the base.
+    clock.base = playbackTime();
     clock.at = performance.now();
+    clock.playing = !clock.playing;
     np.ppIcon.setAttribute('d', clock.playing ? ICON_PAUSE : ICON_PLAY);
   }
 }
 
 function seekToFraction(frac) {
+  if (!(clock.duration > 0)) return;
   const secs = Math.max(0, Math.min(1, frac)) * clock.duration;
+  // Always invariant: the watcher parses this with InvariantCulture, because
+  // [double]::TryParse on a comma-decimal locale reads "123.45" as 12345 and
+  // the player answers a seek past the end by skipping to the next track.
   bridge?.media(`seek ${secs.toFixed(2)}`);
   clock.base = secs;
   clock.at = performance.now();
+  clock.reported = null;      // force a real resync on the next reading
   tickProgress();
 }
 
@@ -341,6 +462,12 @@ function bindTransport() {
     if (!(clock.duration > 0) || !nowPlaying?.canSeek) return;
     const r = np.track.getBoundingClientRect();
     seekToFraction((e.clientX - r.left) / r.width);
+  });
+
+  np.mute.addEventListener('click', toggleMute);
+  np.volTrack.addEventListener('click', (e) => {
+    const r = np.volTrack.getBoundingClientRect();
+    setVolumeFraction((e.clientX - r.left) / r.width);
   });
 }
 
@@ -362,7 +489,18 @@ function transportButtonAt(p) {
   for (const b of np.transport.querySelectorAll('button[data-cmd]')) {
     if (!b.disabled && inRect(p, b.getBoundingClientRect())) return b;
   }
+  if (np.volume.style.display !== 'none' && inRect(p, np.mute.getBoundingClientRect())) {
+    return np.mute;
+  }
   return null;
+}
+
+// A few-pixel-tall bar is not a real target for a mouse, so both sliders get a
+// taller invisible grab band centred on them.
+function onSlider(p, el, band = 16) {
+  const r = el.getBoundingClientRect();
+  return p.x >= r.left && p.x <= r.right &&
+    Math.abs(p.y - (r.top + r.bottom) / 2) <= band;
 }
 
 function transportHover(p) {
@@ -375,14 +513,17 @@ function transportHover(p) {
 
 function transportClick(p) {
   const btn = transportButtonAt(p);
+  if (btn === np.mute) { toggleMute(); return true; }
   if (btn) { runCommand(btn.dataset.cmd); return true; }
 
-  if (!(clock.duration > 0) || !nowPlaying?.canSeek) return false;
-  const r = np.track.getBoundingClientRect();
-  // The bar is only a few pixels tall; without a taller grab band it would be
-  // effectively impossible to hit with a real mouse.
-  if (p.x >= r.left && p.x <= r.right &&
-      Math.abs(p.y - (r.top + r.bottom) / 2) <= 16) {
+  if (np.volume.style.display !== 'none' && onSlider(p, np.volTrack, 13)) {
+    const r = np.volTrack.getBoundingClientRect();
+    setVolumeFraction((p.x - r.left) / r.width);
+    return true;
+  }
+
+  if (clock.duration > 0 && nowPlaying?.canSeek && onSlider(p, np.track)) {
+    const r = np.track.getBoundingClientRect();
     seekToFraction((p.x - r.left) / r.width);
     return true;
   }
@@ -458,10 +599,7 @@ function bindInteraction() {
       toast('next track');
     } else if (e.key === ' ') {
       e.preventDefault();
-      bridge?.media('playpause');
-      clock.playing = !clock.playing;
-      clock.at = performance.now();
-      np.ppIcon.setAttribute('d', clock.playing ? ICON_PAUSE : ICON_PLAY);
+      runCommand('playpause');
     } else if (k === 'o') {
       const on = !settings.orbitLauncher;
       bridge?.set('orbitLauncher', on);

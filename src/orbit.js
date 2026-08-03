@@ -35,6 +35,7 @@ export class OrbitLauncher {
     this.scale = 1;
 
     this.phase = 0;           // fraction of a lap, not an angle
+    this.reserveBottom = 0;
     this._arcs = [null, null];
     this.paused = false;      // held still while the pointer is on the desktop
     this.hover = -1;
@@ -53,13 +54,22 @@ export class OrbitLauncher {
     this._build();
   }
 
-  setOptions({ enabled, speed, scale }) {
+  setOptions({ enabled, speed, scale, tint }) {
     if (typeof enabled === 'boolean') {
       this.enabled = enabled;
       this.root.classList.toggle('on', enabled);
     }
     if (typeof speed === 'number') this.speed = speed;
     if (typeof scale === 'number') this.scale = scale;
+    if (typeof tint === 'boolean') this.root.classList.toggle('tint', tint);
+  }
+
+  // Pixels along the bottom of the screen the ring must keep clear, so the
+  // lyrics aren't sitting underneath a row of icons. The ellipse is squashed
+  // symmetrically rather than clipped at the bottom, which keeps it an ellipse
+  // — and a flatter one reads *more* like the disk's orbital plane, not less.
+  setReserveBottom(px) {
+    this.reserveBottom = Math.max(0, px || 0);
   }
 
   _build() {
@@ -266,19 +276,25 @@ export class OrbitLauncher {
     // 60px disc reads as half the size it does in a dev window. Scale with the
     // viewport the same way the now-playing panel does — clamped at 1 below so
     // the windowed layout stays exactly as tuned.
-    const vp = Math.min(1.7, Math.max(1, W / 1440));
-
-    const rxOuter = Math.min(
-      Math.min(W, H * 1.7) * 0.40 * this.scale,
-      W / 2 - HALF_LABEL * vp - 16);
-    const ryOuter = Math.min(H * 0.36 * this.scale, H / 2 - BODY_HALF_H * vp);
+    const vp = Math.min(1.45, Math.max(0.9, W / 1600));
 
     // The vertical gap between the rings has to exceed a body's height or the
     // two collide near the top and bottom of the ellipse, which is the whole
     // reason for the second ring. Shrinking the bodies a little when there are
     // two of them buys the rest of the clearance.
     const INNER = 0.63;
-    const dens = rings === 2 ? 0.86 : 1;
+    const dens = (rings === 2 ? 0.86 : 1) * 0.88;
+
+    const halfH = BODY_HALF_H * vp * dens;
+    const rxOuter = Math.min(
+      Math.min(W, H * 1.7) * 0.40 * this.scale,
+      W / 2 - HALF_LABEL * vp * dens - 16);
+    const ryOuter = Math.min(
+      H * 0.36 * this.scale,
+      H / 2 - halfH,
+      // Keep the lowest body clear of whatever is parked along the bottom
+      // (the lyrics). 0.92 mirrors the squash applied to y below.
+      Math.max(60, (H / 2 - this.reserveBottom - halfH) / 0.92));
 
     for (let i = 0; i < n; i++) {
       const el = this.bodies[i];
@@ -306,7 +322,10 @@ export class OrbitLauncher {
       const depth = (Math.sin(a) + 1) / 2;          // 0 far .. 1 near
       const hovered = this.hover === i;
       const s = (0.78 + depth * 0.34) * dens * vp * (hovered ? 1.22 : 1) * (1 + beat * 0.05);
-      const opacity = (0.42 + depth * 0.58) * (hovered ? 1 : 0.94);
+      // The far side is dimmed for depth, but not so far that it stops being
+      // readable — those bodies pass over the disk, which is the brightest
+      // thing on screen, and 0.42 against that was just muddy.
+      const opacity = (0.56 + depth * 0.44) * (hovered ? 1 : 0.94);
 
       el.style.transform =
         `translate3d(${(x).toFixed(1)}px, ${(y).toFixed(1)}px, 0) translate(-50%, -50%) scale(${s.toFixed(3)})`;

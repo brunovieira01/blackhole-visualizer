@@ -30,6 +30,23 @@ console.log('\nLRC parsing (offline)\n');
   check('sorts by time', lines.every((l, i, a) => i === 0 || a[i - 1].time <= l.time));
 }
 
+console.log('\n[offset:] handling — this is what "the lyrics are out of time" was\n');
+{
+  const body = '[00:30.00]line';
+  const plain = parseLrc(body);
+  const early = parseLrc('[offset:+2000]\n' + body);
+  const late = parseLrc('[offset:-1500]\n' + body);
+
+  check('no offset tag leaves timings alone', Math.abs(plain[0].time - 30) < 1e-6);
+  check('positive offset shows the line earlier',
+    Math.abs(early[0].time - 28) < 1e-6, `${early[0].time}s`);
+  check('negative offset shows the line later',
+    Math.abs(late[0].time - 31.5) < 1e-6, `${late[0].time}s`);
+  check('an offset cannot push a line before the start',
+    parseLrc('[offset:+99000]\n' + body)[0].time === 0);
+  check('the offset tag is not itself a lyric', early.length === 1);
+}
+
 console.log('\nLRCLIB lookup (live)\n');
 try {
   const res = await fetchLyrics({
@@ -45,6 +62,10 @@ try {
     check('returns something', !!res);
     check('has synced lyrics', Array.isArray(res.synced) && res.synced.length > 5,
       `${res.synced ? res.synced.length : 0} lines`);
+    // The unsynced path used to dump the whole song on screen as one block.
+    check('never returns an unsynced wall of text', res.plain === undefined);
+    check('the match is the same length as the track',
+      Math.abs((res.duration || 0) - 337) <= 5, `${res.duration}s vs 337s`);
     if (res.synced?.length) {
       check('timestamps look sane', res.synced[0].time >= 0 &&
         res.synced[res.synced.length - 1].time < 1200);

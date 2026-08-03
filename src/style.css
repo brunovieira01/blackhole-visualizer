@@ -78,6 +78,27 @@ html, body {
   -webkit-user-drag: none;
 }
 
+/* Tinted icons.
+   A desktop's worth of app logos is a scatter of unrelated brand colours, which
+   reads as a toolbar rather than as bodies in orbit. Flattening them to one hue
+   fixes that, and it has to be done with filters rather than a mask: masking
+   uses the alpha channel, and plenty of icons are opaque squares that would
+   turn into featureless blocks. grayscale+sepia lays down a known warm hue that
+   hue-rotate can then aim at the theme accent, while the luminance detail that
+   makes an icon recognisable survives untouched. */
+.orbit.tint .body-disc img {
+  filter:
+    grayscale(1)
+    sepia(1)
+    saturate(2.6)
+    hue-rotate(calc((var(--accent-hue, 32) - 38) * 1deg))
+    brightness(1.06)
+    contrast(1.05)
+    drop-shadow(0 2px 5px rgba(0, 0, 0, 0.85));
+}
+
+.orbit.tint .body.hover .body-disc img { filter: none; }
+
 .body-letter {
   font: 600 24px/1 "Cascadia Mono", "Consolas", ui-monospace, monospace;
   color: rgba(var(--accent), 0.9);
@@ -89,7 +110,13 @@ html, body {
   letter-spacing: 0.05em;
   text-align: center;
   color: rgba(255, 244, 234, 0.82);
-  text-shadow: 0 2px 10px rgba(0, 0, 0, 0.95), 0 0 3px rgba(0, 0, 0, 0.9);
+  /* Bodies pass in front of the disk, which is the brightest thing on screen.
+     A single soft shadow disappears against it, so this is a tight dark halo
+     plus the soft one. */
+  text-shadow:
+    0 0 2px rgba(0, 0, 0, 0.95),
+    0 1px 3px rgba(0, 0, 0, 0.95),
+    0 2px 12px rgba(0, 0, 0, 0.98);
   overflow: hidden;
   display: -webkit-box;
   -webkit-line-clamp: 2;
@@ -177,18 +204,9 @@ html, body {
   font-weight: 500;
 }
 
-/* Unsynced lyrics have no timing to follow, so only the one block is shown. */
-.lyrics.plain .lyric.prev,
-.lyrics.plain .lyric.next { display: none; }
-
-.lyrics.plain .lyric.cur {
-  font-size: clamp(15px, 1.15vw, 26px);
-  font-weight: 500;
-  color: rgba(255, 246, 238, 0.86);
-  white-space: pre-line;
-  max-height: 34vh;
-  overflow: hidden;
-}
+/* Only timed lyrics are ever shown — see lib/lyrics.js. An unsynced upload is
+   the whole song at once with no idea when any of it happens, which on screen
+   is a wall of words that never matches what you're hearing. */
 
 /* ---- now playing -------------------------------------------------------- */
 /* Sized in vw so it reads the same on a 1280px window and a 4K wallpaper.
@@ -368,10 +386,86 @@ body:not(.can-click):not(.forwarded) .np-transport { display: none; }
 
 /* Hover state for the forwarded pointer: :hover never fires in wallpaper
    mode, so the class is applied from JS instead. */
-.np-transport button.hot {
+.np-transport button.hot,
+.np-volume button.hot {
   background: rgba(var(--accent), 0.20);
   color: #fff;
 }
+
+/* ---- volume -------------------------------------------------------------- */
+.np-volume {
+  display: flex;
+  align-items: center;
+  gap: clamp(8px, 0.6vw, 16px);
+  margin-top: clamp(8px, 0.6vw, 16px);
+  max-width: clamp(150px, 12vw, 300px);
+}
+
+.np-volume button {
+  all: unset;
+  display: grid;
+  place-items: center;
+  width: clamp(20px, 1.45vw, 34px);
+  height: clamp(20px, 1.45vw, 34px);
+  border-radius: 50%;
+  color: rgba(255, 248, 240, 0.78);
+  transition: background 0.18s ease, color 0.18s ease;
+  flex: none;
+}
+
+.np-vol-glyph {
+  width: 62%;
+  height: 62%;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.np-vol-glyph .cone { fill: currentColor; stroke: none; }
+.np-vol-glyph .w1,
+.np-vol-glyph .w2,
+.np-vol-glyph .x { fill: none; stroke: currentColor; }
+
+/* Waves drop away as the level falls, and the cross replaces them when muted,
+   so the glyph says what the bar says without having to read the bar. */
+.np-vol-glyph .x { display: none; }
+.np-volume.vol-1 .np-vol-glyph .w2,
+.np-volume.vol-0 .np-vol-glyph .w1,
+.np-volume.vol-0 .np-vol-glyph .w2 { display: none; }
+
+.np-volume.muted .np-vol-glyph .w1,
+.np-volume.muted .np-vol-glyph .w2 { display: none; }
+.np-volume.muted .np-vol-glyph .x { display: block; }
+.np-volume.muted button { color: rgba(255, 248, 240, 0.42); }
+
+.np-vol-track {
+  position: relative;
+  flex: 1;
+  height: clamp(3px, 0.22vw, 6px);
+  border-radius: 999px;
+  background: rgba(255, 245, 235, 0.16);
+  overflow: hidden;
+}
+
+.np-vol-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: inherit;
+  background: rgba(var(--accent), 0.85);
+  transition: width 0.12s linear;
+}
+
+.np-volume.muted .np-vol-fill { background: rgba(255, 245, 235, 0.28); }
+
+body.can-click .np-volume button:not([disabled]):hover {
+  background: rgba(var(--accent), 0.20);
+  color: #fff;
+  cursor: pointer;
+}
+body.can-click .np-vol-track { cursor: pointer; }
+
+/* Same reasoning as the transport: only shown where a click can reach it. */
+body:not(.can-click):not(.forwarded) .np-volume { display: none; }
 
 /* ---- HUD ---------------------------------------------------------------- */
 .hud {

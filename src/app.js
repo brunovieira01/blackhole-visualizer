@@ -6,6 +6,7 @@
 import { BlackHoleRenderer } from './renderer.js';
 import { AudioEngine } from './audio.js';
 import { THEMES, THEME_IDS } from './themes.js';
+import { OrbitLauncher } from './orbit.js';
 
 const bridge = window.bhv;
 const canvas = document.getElementById('gl');
@@ -34,6 +35,13 @@ const np = {
   fill: document.getElementById('np-fill'),
   transport: document.getElementById('np-transport'),
   ppIcon: document.getElementById('np-pp-icon'),
+};
+
+const lyricEls = {
+  root: document.getElementById('lyrics'),
+  prev: document.getElementById('lyric-prev'),
+  cur: document.getElementById('lyric-cur'),
+  next: document.getElementById('lyric-next'),
 };
 
 const ICON_PLAY = 'M8 5l11 7-11 7z';
@@ -69,6 +77,7 @@ const WARP_LABELS = ['off', 'subtle', 'normal', 'strong', 'turbulent'];
 
 let renderer;
 let audio;
+let orbit;
 let settings = {};
 let mode = 'window';
 let toastTimer = null;
@@ -151,6 +160,60 @@ function tickProgress() {
   np.elapsed.textContent = fmtTime(t);
 }
 
+// ---------------------------------------------------------------------------
+//  Lyrics
+//
+//  Main hands over the whole LRC for the current track; the timing is done
+//  here against the same locally-advanced playback clock the progress bar
+//  uses, so the line changes on the beat rather than once a second.
+// ---------------------------------------------------------------------------
+const lyricState = { data: null, index: -2, lastT: 0 };
+
+function setLyrics(data) {
+  lyricState.data = data && (data.lines?.length || data.plain) ? data : null;
+  lyricState.index = -2;
+  lyricState.lastT = 0;
+  lyricEls.prev.textContent = '';
+  lyricEls.cur.textContent = '';
+  lyricEls.next.textContent = '';
+  renderLyrics();
+}
+
+function renderLyrics() {
+  const d = lyricState.data;
+  const on = (settings.showLyrics ?? true) && !!d &&
+    nowPlaying && nowPlaying.kind === 'media';
+
+  lyricEls.root.classList.toggle('on', on);
+  if (!on) return;
+
+  // No timings — show the plain text as one static block and leave it alone.
+  const synced = d.lines && d.lines.length > 0;
+  lyricEls.root.classList.toggle('plain', !synced);
+  if (!synced) {
+    if (lyricEls.cur.textContent !== d.plain) lyricEls.cur.textContent = d.plain;
+    return;
+  }
+
+  const lines = d.lines;
+  const t = clock.base + (clock.playing ? (performance.now() - clock.at) / 1000 : 0);
+
+  // A seek (or a new track) can move time backwards; the cached index is only
+  // a valid starting point when time moved forward.
+  let i = t < lyricState.lastT ? -1 : Math.max(-1, lyricState.index);
+  lyricState.lastT = t;
+  if (i < -1 || i >= lines.length) i = -1;
+  while (i + 1 < lines.length && lines[i + 1].time <= t) i++;
+  while (i >= 0 && lines[i].time > t) i--;
+
+  if (i === lyricState.index) return;
+  lyricState.index = i;
+
+  lyricEls.prev.textContent = i > 0 ? lines[i - 1].text : '';
+  lyricEls.cur.textContent = i >= 0 ? lines[i].text : '';
+  lyricEls.next.textContent = i + 1 < lines.length ? lines[i + 1].text : '';
+}
+
 // Theme colours are HDR (components above 1.0), so normalise against the
 // brightest channel before handing an rgb triplet to CSS.
 function applyAccent(hot) {
@@ -181,8 +244,15 @@ function applySettings(s) {
     autoOrbit: settings.autoOrbit ?? 0,
   });
 
+  orbit?.setOptions({
+    enabled: !!settings.orbitLauncher,
+    speed: settings.orbitSpeed ?? 1.0,
+    scale: settings.orbitScale ?? 1.0,
+  });
+
   applyAccent(theme.hot);
   renderNowPlaying();
+  renderLyrics();
 
   // Auto quality starts from "high" and adapts from there
   autoQuality.enabled = settings.quality === 'auto';
@@ -240,43 +310,96 @@ function tuneQuality(dt) {
 //  there the transport is hidden and the tray menu / global hotkeys drive
 //  playback instead.
 // ---------------------------------------------------------------------------
+function runCommand(cmd) {
+  bridge?.media(cmd);
+  // Flip the glyph immediately; the watcher confirms within a second.
+  if (cmd === 'playpause') {
+    clock.playing = !clock.playing;
+    clock.at = performance.now();
+    np.ppIcon.setAttribute('d', clock.playing ? ICON_PAUSE : ICON_PLAY);
+  }
+}
+
+function seekToFraction(frac) {
+  const secs = Math.max(0, Math.min(1, frac)) * clock.duration;
+  bridge?.media(`seek ${secs.toFixed(2)}`);
+  clock.base = secs;
+  clock.at = performance.now();
+  tickProgress();
+}
+
 function bindTransport() {
   document.body.classList.add('can-click');
 
   np.transport.addEventListener('click', (e) => {
     const btn = e.target.closest('button[data-cmd]');
     if (!btn || btn.disabled) return;
-    bridge?.media(btn.dataset.cmd);
-    // Flip the glyph immediately; the watcher confirms within a second.
-    if (btn.dataset.cmd === 'playpause') {
-      clock.playing = !clock.playing;
-      clock.base = clock.base + 0;
-      clock.at = performance.now();
-      np.ppIcon.setAttribute('d', clock.playing ? ICON_PAUSE : ICON_PLAY);
-    }
+    runCommand(btn.dataset.cmd);
   });
 
   np.track.addEventListener('click', (e) => {
     if (!(clock.duration > 0) || !nowPlaying?.canSeek) return;
     const r = np.track.getBoundingClientRect();
-    const frac = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width));
-    const secs = frac * clock.duration;
-    bridge?.media(`seek ${secs.toFixed(2)}`);
-    clock.base = secs;
-    clock.at = performance.now();
-    tickProgress();
+    seekToFraction((e.clientX - r.left) / r.width);
   });
 }
 
+// ---------------------------------------------------------------------------
+//  Transport via the forwarded pointer (wallpaper mode)
+//
+//  No real mouse event ever reaches this window, so the buttons are hit-tested
+//  against their own layout rectangles instead. Same commands, same panel — it
+//  just gets its coordinates from the main process rather than from the DOM.
+// ---------------------------------------------------------------------------
+let hotButton = null;
+
+function inRect(p, r) {
+  return p.x >= r.left && p.x <= r.right && p.y >= r.top && p.y <= r.bottom;
+}
+
+function transportButtonAt(p) {
+  if (!p || !np.root.classList.contains('show')) return null;
+  for (const b of np.transport.querySelectorAll('button[data-cmd]')) {
+    if (!b.disabled && inRect(p, b.getBoundingClientRect())) return b;
+  }
+  return null;
+}
+
+function transportHover(p) {
+  const hit = transportButtonAt(p);
+  if (hit === hotButton) return;
+  hotButton?.classList.remove('hot');
+  hotButton = hit;
+  hotButton?.classList.add('hot');
+}
+
+function transportClick(p) {
+  const btn = transportButtonAt(p);
+  if (btn) { runCommand(btn.dataset.cmd); return true; }
+
+  if (!(clock.duration > 0) || !nowPlaying?.canSeek) return false;
+  const r = np.track.getBoundingClientRect();
+  // The bar is only a few pixels tall; without a taller grab band it would be
+  // effectively impossible to hit with a real mouse.
+  if (p.x >= r.left && p.x <= r.right &&
+      Math.abs(p.y - (r.top + r.bottom) / 2) <= 16) {
+    seekToFraction((p.x - r.left) / r.width);
+    return true;
+  }
+  return false;
+}
+
 // Overlay mode is click-through so the desktop stays usable. Ask main for
-// clicks back only while the pointer is actually over the panel.
+// clicks back only while the pointer is actually over something clickable —
+// the transport panel, or one of the orbiting shortcuts.
 function bindOverlayHover() {
   let inside = false;
   window.addEventListener('mousemove', (e) => {
     const r = np.root.getBoundingClientRect();
-    const over = np.root.classList.contains('show') &&
+    const over = (np.root.classList.contains('show') &&
       e.clientX >= r.left && e.clientX <= r.right &&
-      e.clientY >= r.top && e.clientY <= r.bottom;
+      e.clientY >= r.top && e.clientY <= r.bottom) ||
+      !!orbit?.hitAt(e.clientX, e.clientY);
     if (over !== inside) {
       inside = over;
       bridge?.setInteractive(over);
@@ -339,6 +462,14 @@ function bindInteraction() {
       clock.playing = !clock.playing;
       clock.at = performance.now();
       np.ppIcon.setAttribute('d', clock.playing ? ICON_PAUSE : ICON_PLAY);
+    } else if (k === 'o') {
+      const on = !settings.orbitLauncher;
+      bridge?.set('orbitLauncher', on);
+      toast('orbit launcher ' + (on ? 'on' : 'off'));
+    } else if (k === 'l') {
+      const on = !(settings.showLyrics ?? true);
+      bridge?.set('showLyrics', on);
+      toast('lyrics ' + (on ? 'on' : 'off'));
     } else if (k === 'f') {
       bridge?.toggleFullscreen();
     } else if (e.key === 'ArrowUp') {
@@ -371,12 +502,35 @@ async function main() {
   document.body.classList.toggle('passive', mode !== 'window');
   renderer.alphaOut = mode === 'overlay' ? 1 : 0;
 
+  orbit = new OrbitLauncher(document.getElementById('orbit'), {
+    onLaunch: (item) => bridge?.orbitLaunch(item.path),
+    onContext: (item) => bridge?.orbitContext(item.path),
+  });
+  // As the wallpaper we are below Explorer's desktop, which eats every click.
+  // Main forwards the global cursor instead; everywhere else the elements get
+  // ordinary pointer events.
+  orbit.setSynthetic(mode === 'wallpaper');
+  if (mode === 'wallpaper') document.body.classList.add('forwarded');
+  bridge?.onDesktopPointer((p) => { orbit.pointer(p); transportHover(p); });
+  bridge?.onDesktopClick((p) => {
+    if (p.button !== 'left') return;
+    // The panel wins over a body underneath it — it's the smaller target and
+    // the one the pointer was deliberately aimed at.
+    if (transportClick(p)) return;
+    orbit.click(p, p.button);
+  });
+  orbit.setItems((await bridge?.getOrbitItems()) || []);
+  bridge?.onOrbitItems((items) => orbit.setItems(items || []));
+
   applySettings(initialSettings);
   bridge?.onSettings((s) => applySettings(s));
 
   nowPlaying = (await bridge?.getNowPlaying()) || { kind: 'none' };
   renderNowPlaying();
-  bridge?.onNowPlaying((info) => { nowPlaying = info; renderNowPlaying(); });
+  bridge?.onNowPlaying((info) => { nowPlaying = info; renderNowPlaying(); renderLyrics(); });
+
+  setLyrics(await bridge?.getLyrics());
+  bridge?.onLyrics((l) => setLyrics(l));
 
   if (mode === 'window') {
     bindInteraction();
@@ -418,6 +572,12 @@ async function main() {
     time += dt;
 
     const a = audio.update(dt);
+
+    // Both run above the idle throttle: the launcher has to stay hoverable
+    // and the lyrics have to keep flowing through a quiet passage, neither of
+    // which costs anything next to the shader.
+    orbit.layout(dt, a);
+    renderLyrics();
 
     // Nothing playing? Idle down to ~12 fps instead of burning the GPU on a
     // still image. Any sound at all brings it straight back.

@@ -7,6 +7,10 @@ It can run as your **actual desktop wallpaper**: reparented into Explorer's wall
 layer, so your icons stay on top and keep working, clicks fall through to the desktop,
 and it never shows up in Alt+Tab or the taskbar.
 
+It reads whatever your media player is doing, shows **synced lyrics** in time with the
+song, and can put your **desktop shortcuts into orbit** around the hole as clickable
+bodies.
+
 ![The visualizer running as the desktop wallpaper](assets/preview.jpg)
 
 ---
@@ -38,7 +42,7 @@ Prefer not to use the setup script? `npm install`, then double-click
 
 | Mode | What it does |
 |---|---|
-| **Desktop wallpaper** *(default)* | Becomes the literal wallpaper. Desktop icons stay on top and stay clickable, Win+D reveals it instead of hiding it, no taskbar entry. |
+| **Desktop wallpaper** *(default)* | Becomes the literal wallpaper. Desktop icons stay on top and stay clickable — or [go into orbit](#the-orbit-launcher) if you'd rather. Win+D reveals it instead of hiding it, no taskbar entry. |
 | **Overlay** | Fullscreen, always on top, click-through. Alpha follows luminance, so only the glow is drawn and the rest of your screen shows through. |
 | **Window** | An ordinary window. Drag to orbit the camera, and you get a HUD with the current state. |
 
@@ -71,15 +75,8 @@ Play/pause, previous and next are wired straight through to the same media sessi
 they drive Spotify, YouTube, VLC — whatever currently holds it. Clicking the progress bar
 seeks, where the app supports it.
 
-**How you reach them depends on the mode**, and this is a hard constraint rather than a
-choice: as the wallpaper the visualiser lives *below* Explorer's desktop icon layer,
-which swallows every click on the desktop. Nothing drawn there can ever be clicked.
-
-| | Wallpaper | Overlay | Window |
-|---|---|---|---|
-| On-screen buttons | hidden (can't be clicked) | yes | yes |
-| Tray menu | yes | yes | yes |
-| Global hotkeys | yes | yes | yes |
+The buttons work in every mode, including as the wallpaper — see
+[Clicking a wallpaper](#clicking-a-wallpaper) for why that takes any effort at all.
 
 Global hotkeys, which work from anywhere regardless of mode:
 
@@ -91,6 +88,78 @@ Global hotkeys, which work from anywhere regardless of mode:
 
 In overlay mode the panel becomes clickable only while the pointer is actually over it —
 the rest of the screen stays click-through.
+
+---
+
+## Lyrics
+
+When a track has synced lyrics they fade up along the bottom of the screen and follow
+the song line by line, with the previous and next lines dimmed above and below.
+
+They come from [LRCLIB](https://lrclib.net) — a free, open, key-less database of LRC
+files. Spotify has no public lyrics API; what its own client shows comes from Musixmatch
+through an internal endpoint that needs a token lifted out of the web player, which is
+both against their terms and permanently one deploy away from breaking. LRCLIB matches on
+exactly what the Windows media session already gives us — artist, title, album and
+duration — and it works for any player, not just Spotify.
+
+The timing is done locally against the playback clock rather than from the once-a-second
+position updates, so lines land on the beat. Unsynced lyrics, where that's all that
+exists, are shown as a single static block. Nothing to sign into, and `L` or the tray
+turns it off.
+
+---
+
+## Clicking a wallpaper
+
+A window inside Explorer's `WorkerW` **cannot receive mouse input**. The desktop's own
+`SHELLDLL_DefView` listview sits above it and swallows every click. That isn't something
+window styles can fix — it's how the shell is layered, and it's why Lively and Wallpaper
+Engine both *forward* input to their wallpapers instead.
+
+So this does the same. The main process samples the global cursor (`GetCursorPos`,
+`GetAsyncKeyState`, `WindowFromPoint`), works out whether the pointer is over the desktop
+rather than over some app window, and sends that to the renderer as synthetic hover and
+click events. **Nothing is hooked and nothing is injected**, so no other application is
+affected and nothing is intercepted from anything else — it only ever *reads* where your
+mouse already is.
+
+Two details fall out of that:
+
+- **The orbit holds still while your cursor is on the desktop.** You cannot reliably click
+  a moving target, so the ring pauses the moment the pointer is over the desktop and
+  resumes when it leaves.
+- **Right-click is deliberately ignored.** Since nothing is swallowed, Explorer still
+  opens its own desktop menu; putting a second menu next to it would be worse than having
+  none. Left-click is safe — on an empty desktop it does nothing Explorer cares about.
+
+---
+
+## The orbit launcher
+
+Turn on **Orbit launcher → Put desktop shortcuts in orbit** and your Desktop becomes a
+set of bodies circling the hole: the real shell icon for each shortcut on a dark disc,
+labelled, lit with the current theme's accent, and clickable. They ride an ellipse
+flattened to match the accretion disk, so the ring reads as an orbital plane rather than
+a circle drawn on the glass — near-side bodies are larger and brighter, far-side ones
+shrink and dim as they pass behind.
+
+- Spacing is by **arc length**, not by angle. On an ellipse this flat, equal angles bunch
+  bodies at the left and right extremes — exactly where the labels are widest — and
+  string them thin across the top and bottom.
+- More than fourteen shortcuts split into **two rings** at different radii and speeds, so
+  labels stay readable.
+- Icons are resolved through the shortcut to the **target's** icon, because
+  `getFileIcon()` on a `.lnk` hands back the generic shortcut glyph more often than not,
+  and a desktop full of blank pages is not much of a launcher.
+- Size and speed are in the tray; **Still** parks the ring if you'd rather it didn't move.
+
+By default it also **hides the real desktop icons**, since having both is just clutter.
+That's the same toggle as right-click → View → Show desktop icons, so you can always put
+them back by hand. The app restores them when it quits, and if it's killed outright it
+remembers on disk that it hid them and puts them back on next launch.
+
+It's **off by default**: a fresh clone should never empty someone's desktop unannounced.
 
 ---
 
@@ -288,6 +357,8 @@ your GPU on a still image all day.
 | `1` – `6` | Theme |
 | `H` | Toggle HUD |
 | `N` | Toggle the now-playing panel |
+| `O` | Toggle the orbit launcher |
+| `L` | Toggle lyrics |
 | `space` | Play / pause |
 | `,` `.` | Previous / next track |
 | `↑` `↓` | Reactivity |
@@ -306,13 +377,21 @@ Themes: Gargantua, Cygnus X-1, Nova, Emerald, Ember, Monochrome.
 main.js                 Electron main: modes, tray, config, loopback plumbing
 preload.js              The (small) IPC bridge
 native/wallpaper.js     WorkerW reparenting via koffi — the live-wallpaper trick
+native/desktop.js       Desktop icon toggle + global pointer sampling
+lib/desktop-items.js    Reads the Desktop and resolves shortcut icons
+lib/lyrics.js           LRCLIB client and LRC parser
 src/shaders.js          GLSL: geodesic ray marcher, bloom, composite
 src/renderer.js         WebGL2 pipeline and render targets
 src/audio.js            Loopback capture, per-bin normalisation, onset detection
-src/app.js              Bootstrap, adaptive quality, now-playing panel, input
+src/orbit.js            The orbiting launcher: layout, hit-testing, both input paths
+src/app.js              Bootstrap, adaptive quality, now-playing panel, lyrics, input
 tools/nowplaying.ps1    Media session (SMTC) + WASAPI session watcher
+tools/fake-track.js     A silent but completely real media session, for testing
+tools/probe-desktop.js  Read-only diagnostics for the shell's desktop layer
 tools/make-icon.js      Draws assets/icon.png + icon.ico from scratch
 tools/test-analysis.mjs Asserts the spectrum stays balanced (npm test)
+tools/test-capture.mjs  Pins the capture chain's microphone contract (npm test)
+tools/test-lyrics.mjs   LRC parsing, plus a live LRCLIB lookup
 ```
 
 Settings are stored in `%APPDATA%\blackhole-visualizer\config.json`.
@@ -323,10 +402,19 @@ Settings are stored in `%APPDATA%\blackhole-visualizer\config.json`.
 npm start                    # last used mode
 npm run window               # windowed, with the HUD
 npm run wallpaper            # desktop wallpaper mode
-npm test                     # analyser balance checks (no audio device needed)
+npm test                     # analyser balance + microphone contract (no devices needed)
+npm run test:lyrics          # LRC parsing, and one live LRCLIB lookup
+npm run probe-desktop        # what the shell's desktop layer looks like right now
 npx electron . --demo-audio  # synthetic beat, no capture — handy for tuning
 npx electron . --mode=window --shot=out.png   # render a frame to a PNG and exit
+npx electron tools/fake-track.js              # a silent, real media session to test against
 ```
+
+`fake-track.js` is how the now-playing panel, the transport and the lyrics get tested
+without playing anything audible: Chromium registers a media session for any playing
+unmuted audio track without inspecting the samples, so a looping silent WAV with
+`mediaSession` metadata gives you a genuine SMTC session. It logs every transport command
+it receives, which is what proves the whole chain rather than just that a call returned.
 
 ---
 
@@ -340,6 +428,9 @@ npx electron . --mode=window --shot=out.png   # render a frame to a PNG and exit
   bottom-of-the-z-order window, which looks the same but covers desktop icons.
 - Third-party wallpaper tools (Wallpaper Engine, Lively) fight over the same WorkerW.
   Run one at a time.
+- Lyrics are the only thing here that touches the network, and only to ask LRCLIB about
+  the track that's playing. Nothing else leaves the machine; with no connection the rest
+  of the app is unaffected.
 - Verified on Windows 11 26200 with Electron 43.
 
 ## License

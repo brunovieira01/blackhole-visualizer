@@ -24,12 +24,19 @@ printed to stdout on attach.
 
 ### Testing the media controls
 
-You need a live SMTC session, and you don't want to make noise on someone's machine.
-Play a **silent WAV** in a throwaway Electron window with `navigator.mediaSession`
-metadata and `setActionHandler` callbacks that log: Chromium registers a media session
-for any playing unmuted audio track without inspecting the samples, so you get a real
-session that is completely silent. Fire a command, then check the callback log — that
-proves the whole chain, not just that the call returned.
+`npx electron tools/fake-track.js` gives you a live SMTC session that makes no noise:
+Chromium registers a media session for any playing unmuted audio track without inspecting
+the samples, so a looping silent WAV plus `navigator.mediaSession` metadata is a real
+session. It defaults to Daft Punk / *Instant Crush* / 337 s, which LRCLIB has 83 synced
+lines for, so it exercises the lyrics path too. It logs every transport command it
+receives — fire one, then check the log; that proves the whole chain, not just that the
+call returned.
+
+To test the on-screen buttons **in wallpaper mode**, drive the real cursor: `SetCursorPos`
+to the button and `mouse_event` a left click. That is the only honest test there, because
+the whole point is that no DOM event is involved — main polls the global cursor and
+`app.js` hit-tests the buttons itself against `getBoundingClientRect()`. A click on empty
+desktop is harmless, so this is safe to run on a live session.
 
 To test the on-screen buttons, launch with `--remote-debugging-port=9222` and drive
 `Input.dispatchMouseEvent` over the DevTools protocol (Node has a global `WebSocket`).
@@ -45,15 +52,22 @@ foreground, so the keystrokes land in whatever app is actually in front.
 | `main.js` | Modes, tray menu, config persistence, loopback plumbing, autostart |
 | `preload.js` | contextBridge IPC surface (`window.bhv`) |
 | `native/wallpaper.js` | `SetParent` into Explorer's WorkerW via koffi |
+| `native/desktop.js` | Desktop icon show/hide + global pointer sampling (koffi) |
+| `lib/desktop-items.js` | Reads the Desktop, resolves shortcut target icons |
+| `lib/lyrics.js` | LRCLIB client + LRC parser (no Electron deps except none) |
 | `src/shaders.js` | All GLSL (scene, brightpass, blur, composite) |
 | `src/renderer.js` | WebGL2 pipeline, render targets, uniforms |
 | `src/audio.js` | Capture chain, per-bin normalisation, onset detection |
-| `src/app.js` | Bootstrap, adaptive quality, now-playing panel, keyboard/pointer |
+| `src/orbit.js` | Orbit launcher: arc-length layout, hit-testing, both input paths |
+| `src/app.js` | Bootstrap, adaptive quality, now-playing panel, lyrics, keyboard/pointer |
 | `src/themes.js` | Colour presets (also mirrored as labels in `main.js`) |
 | `tools/nowplaying.ps1` | SMTC + WASAPI watcher, spawned as a child of main |
+| `tools/fake-track.js` | A silent but real SMTC session; logs the commands it receives |
+| `tools/probe-desktop.js` | Read-only diagnostics for the shell's desktop layer |
 | `tools/make-icon.js` | Generates `assets/icon.png` + `icon.ico` (pure Node) |
 | `tools/test-analysis.mjs` | `npm test` — spectrum balance, run headless |
 | `tools/test-capture.mjs` | `npm test` — the capture chain's microphone contract |
+| `tools/test-lyrics.mjs` | `npm run test:lyrics` — LRC parsing + one live lookup |
 
 Mode changes **recreate** the BrowserWindow (`createWindow`) rather than mutating it —
 window flags like `transparent` and `focusable` can't be changed after creation.
@@ -80,6 +94,44 @@ window flags like `transparent` and `focusable` can't be changed after creation.
   if you touch the capture chain, run it.
 - **`getDisplayMedia` needs `video: true`** even though we only want audio; the video
   track is stopped and removed immediately in `AudioEngine._attach`.
+- **A wallpaper window can never receive mouse input.** Explorer's `SHELLDLL_DefView`
+  sits above it and eats every desktop click; no window style fixes this. Input is
+  *forwarded* instead — `native/desktop.js` samples `GetCursorPos` /`GetAsyncKeyState` /
+  `WindowFromPoint` on a 16 ms timer and main sends `desktop-pointer` / `desktop-click`.
+  Nothing is hooked and nothing is injected; keep it that way. Consequences that look
+  like bugs but aren't: the orbit **pauses** whenever the cursor is on the desktop (you
+  can't click a moving target), and synthetic **right-click is ignored** (Explorer still
+  shows its own menu, and two menus is worse than none).
+- **Hiding the desktop icons outlives the process.** `applyDesktopIcons` persists
+  `orbitIconsHidden` to config precisely because a kill -9 leaves the desktop empty with
+  nothing in memory that remembers why; `recoverDesktopIcons()` adopts that at boot so
+  the normal path restores them. `restoreDesktopIcons()` runs from both `will-quit` and
+  `uncaughtException`. If you add another exit path, add it there too.
+- **`orbitLauncher` defaults to `false`.** A fresh clone must never empty someone's
+  desktop unannounced.
+- **`app.getFileIcon()` on a `.lnk`** usually returns the generic shortcut glyph, not the
+  target's icon. `lib/desktop-items.js` resolves the link with `shell.readShortcutLink`
+  and asks for the *target's* icon, falling back to the `.lnk`. Every icon lookup has a
+  2.5 s deadline: a shortcut pointing at a dead network share blocks both `existsSync`
+  and the shell lookup for seconds, and one of those must not stall the whole launcher.
+- **`get-orbit-items` awaits the in-flight load.** Icon resolution is slow enough that a
+  starting renderer reliably beats it; without the await the orbit comes up empty and
+  stays that way until the desktop next changes. Broadcasting alone doesn't fix it — the
+  broadcast can land before the renderer has registered its listener.
+- **Space the orbit by arc length, not by angle.** The ellipse is deliberately flat, so
+  equal angles bunch bodies at the left and right extremes — exactly where the labels are
+  widest. `phase` is a fraction of a lap, not an angle, so speed is constant too.
+- **`_hit` must track `.body-disc`.** The hit radius (30 px) is the CSS disc radius; it is
+  scaled by `s` only, never by `this.scale`, which grows the *ring* and not the bodies.
+- **Lyrics timing is done in the renderer**, against the same locally-advanced clock the
+  progress bar uses. Driving it from the watcher's once-a-second position would visibly
+  lag. `refreshLyrics()` is keyed on track *identity*, not on the `changed` flag, so
+  pausing doesn't throw the lyrics away and re-fetch on resume.
+- **LRCLIB intermittently answers a good query with nothing.** `lyrics.js` therefore only
+  caches a negative when the search actually returned candidates and they were rejected;
+  an empty or failed response is not cached, and `main.js` retries once after 4 s. Don't
+  "simplify" that back into an unconditional negative cache — the symptom is a song
+  silently having no lyrics for its whole duration.
 - **koffi is an optional dependency.** `native/wallpaper.js` must keep degrading
   gracefully when it's missing — `main.js` falls back to a bottom-of-z-order window.
 - **HDR values are intentional.** Theme `hot` colours exceed 1.0 so the bright pass has

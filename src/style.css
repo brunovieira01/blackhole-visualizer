@@ -19,6 +19,177 @@ html, body {
   --accent: 255, 190, 120;
 }
 
+/* ---- orbit launcher ------------------------------------------------------
+   Desktop shortcuts as bodies orbiting the hole. Positions are written as
+   transforms from JS every frame; everything here is just appearance. */
+.orbit {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.6s ease;
+  z-index: 50;
+}
+
+.orbit.on { opacity: 1; }
+
+/* In wallpaper mode the window never receives real mouse events — hover and
+   clicks are forwarded from the main process, so the elements must not try to
+   capture anything themselves. */
+.orbit.synthetic .body { pointer-events: none; }
+.orbit.on:not(.synthetic) .body { pointer-events: auto; }
+
+.body {
+  all: unset;
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 9px;
+  width: 108px;
+  will-change: transform, opacity;
+  transition: opacity 0.25s ease;
+}
+
+.body-disc {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 60px;               /* radius 30 — mirrored in orbit.js _hit */
+  height: 60px;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 32% 28%, rgba(255, 255, 255, 0.16), rgba(0, 0, 0, 0) 62%),
+    radial-gradient(circle at 50% 50%, rgba(18, 12, 8, 0.9), rgba(6, 4, 3, 0.96));
+  box-shadow:
+    0 0 0 1px rgba(var(--accent), 0.30),
+    0 0 calc(20px * var(--glow, 0.3)) rgba(var(--accent), calc(0.55 * var(--glow, 0.3))),
+    inset 0 0 18px rgba(0, 0, 0, 0.75);
+  transition: box-shadow 0.22s ease, background 0.22s ease;
+}
+
+.body-disc img {
+  width: 34px;
+  height: 34px;
+  object-fit: contain;
+  filter: drop-shadow(0 2px 5px rgba(0, 0, 0, 0.85));
+  -webkit-user-drag: none;
+}
+
+.body-letter {
+  font: 600 24px/1 "Cascadia Mono", "Consolas", ui-monospace, monospace;
+  color: rgba(var(--accent), 0.9);
+}
+
+.body-label {
+  max-width: 108px;
+  font: 11px/1.35 "Cascadia Mono", "Consolas", ui-monospace, monospace;
+  letter-spacing: 0.05em;
+  text-align: center;
+  color: rgba(255, 244, 234, 0.82);
+  text-shadow: 0 2px 10px rgba(0, 0, 0, 0.95), 0 0 3px rgba(0, 0, 0, 0.9);
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  word-break: break-word;
+}
+
+.body.hover .body-disc {
+  box-shadow:
+    0 0 0 1px rgba(var(--accent), 0.85),
+    0 0 34px rgba(var(--accent), 0.75),
+    inset 0 0 18px rgba(0, 0, 0, 0.6);
+}
+
+.body.hover .body-label { color: #fff; }
+
+/* A brief flare so a click that opens a slow app still feels acknowledged. */
+@keyframes body-launch {
+  0%   { box-shadow: 0 0 0 1px rgba(var(--accent), 1), 0 0 12px rgba(var(--accent), 0.9); }
+  45%  { box-shadow: 0 0 0 3px rgba(var(--accent), 0.9), 0 0 62px rgba(var(--accent), 1); }
+  100% { box-shadow: 0 0 0 1px rgba(var(--accent), 0.3), 0 0 20px rgba(var(--accent), 0.3); }
+}
+
+.body.launching .body-disc { animation: body-launch 0.65s ease-out; }
+
+/* ---- lyrics --------------------------------------------------------------
+   Bottom-centre, clear of the disk and the spectrum ring. */
+.lyrics {
+  position: fixed;
+  left: 50%;
+  bottom: clamp(58px, 7vh, 130px);
+  transform: translateX(-50%);
+  width: min(74vw, 1150px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: clamp(6px, 0.5vh, 12px);
+  text-align: center;
+  pointer-events: none;
+  user-select: none;
+  opacity: 0;
+  transition: opacity 0.5s ease;
+  z-index: 60;
+}
+
+.lyrics.on { opacity: 1; }
+
+/* The lyrics land on top of whatever the scene (and the orbit launcher) put
+   there. A soft scrim pushes all of it back far enough to read against,
+   without drawing a visible panel. */
+.lyrics::before {
+  content: "";
+  position: absolute;
+  inset: -34px -70px -40px;
+  z-index: -1;
+  pointer-events: none;
+  background: radial-gradient(
+    ellipse at center,
+    rgba(0, 0, 0, 0.72) 0%,
+    rgba(0, 0, 0, 0.52) 46%,
+    rgba(0, 0, 0, 0) 78%);
+}
+
+.lyric {
+  font-family: "Segoe UI", "Inter", system-ui, sans-serif;
+  font-weight: 600;
+  line-height: 1.32;
+  text-wrap: balance;
+  transition: opacity 0.35s ease, transform 0.35s ease, color 0.35s ease;
+  text-shadow: 0 2px 22px rgba(0, 0, 0, 0.95), 0 0 6px rgba(0, 0, 0, 0.8);
+}
+
+.lyric:empty { display: none; }
+
+.lyric.cur {
+  font-size: clamp(21px, 2.05vw, 46px);
+  color: #fff;
+  letter-spacing: 0.005em;
+}
+
+.lyric.prev,
+.lyric.next {
+  font-size: clamp(14px, 1.15vw, 26px);
+  color: rgba(255, 246, 238, 0.34);
+  font-weight: 500;
+}
+
+/* Unsynced lyrics have no timing to follow, so only the one block is shown. */
+.lyrics.plain .lyric.prev,
+.lyrics.plain .lyric.next { display: none; }
+
+.lyrics.plain .lyric.cur {
+  font-size: clamp(15px, 1.15vw, 26px);
+  font-weight: 500;
+  color: rgba(255, 246, 238, 0.86);
+  white-space: pre-line;
+  max-height: 34vh;
+  overflow: hidden;
+}
+
 /* ---- now playing -------------------------------------------------------- */
 /* Sized in vw so it reads the same on a 1280px window and a 4K wallpaper.
    --np-scale then sizes the whole panel in one place; anchored top-left so
@@ -190,8 +361,17 @@ body.can-click .np-track { cursor: pointer; }
 body.can-click .np { pointer-events: auto; }
 
 /* In wallpaper mode the visualiser lives below the desktop icon layer and can
-   never receive a click, so the transport is hidden rather than shown dead. */
-body:not(.can-click) .np-transport { display: none; }
+   never receive a click. It is still usable there, because the main process
+   forwards the global cursor and app.js hit-tests these buttons itself — but
+   without either of those the transport is hidden rather than shown dead. */
+body:not(.can-click):not(.forwarded) .np-transport { display: none; }
+
+/* Hover state for the forwarded pointer: :hover never fires in wallpaper
+   mode, so the class is applied from JS instead. */
+.np-transport button.hot {
+  background: rgba(var(--accent), 0.20);
+  color: #fff;
+}
 
 /* ---- HUD ---------------------------------------------------------------- */
 .hud {

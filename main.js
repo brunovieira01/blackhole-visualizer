@@ -23,6 +23,9 @@ const fs = require('node:fs');
 const { spawn } = require('node:child_process');
 
 const wallpaper = require('./native/wallpaper');
+const desktop = require('./native/desktop');
+const desktopItems = require('./lib/desktop-items');
+const { fetchLyrics } = require('./lib/lyrics');
 
 // GPU-friendly defaults for something that runs all day in the background.
 app.commandLine.appendSwitch('enable-gpu-rasterization');
@@ -67,6 +70,16 @@ const DEFAULTS = {
   allMonitors: false,
   idleThrottle: true,
   launchAtLogin: false,
+
+  // Desktop shortcuts drawn as bodies orbiting the hole. Off by default
+  // because turning it on hides the real desktop icons, and a fresh clone
+  // should never do that to someone unannounced.
+  orbitLauncher: false,
+  orbitHideIcons: true,
+  orbitSpeed: 1.0,
+  orbitScale: 1.0,
+
+  showLyrics: true,
 };
 
 // --demo-audio: ignore capture and drive the visuals from a synthetic beat.
@@ -76,6 +89,7 @@ let forceDemo = false;
 let config = { ...DEFAULTS };
 let configPath;
 let win = null;           // primary display's window — owns the tray, hotkeys, HUD
+let winDisplay = null;    // the display `win` covers, needed to map screen->window
 let wins = [];            // { win, display } for every other monitor when spanning
 let tray = null;
 let currentMode = 'window';
@@ -144,6 +158,8 @@ function setConfig(patch, { recreate = false } = {}) {
   saveConfig();
   if (recreate) createWindow(config.mode);
   else for (const w of allWindows()) w.webContents.send('settings', config);
+  if ('orbitLauncher' in patch || 'orbitHideIcons' in patch) applyOrbitConfig();
+  if ('showLyrics' in patch) refreshLyrics();
   buildTray();
 }
 
@@ -314,6 +330,7 @@ function createWindow(mode) {
 
   const displays = displaysForMode();
   win = new BrowserWindow(windowOptions(mode, displays[0]));
+  winDisplay = displays[0];
   setupWindowInstance(win, mode, displays[0], true);
 
   wins = displays.slice(1).map((display) => {
@@ -332,6 +349,200 @@ function createWindow(mode) {
       ow.destroy();
     }
   }
+
+  desktop.invalidate();     // WorkerW set changes when we re-attach
+  applyDesktopIcons();
+  startPointerForwarding();
+}
+
+// ---------------------------------------------------------------------------
+//  Orbit launcher
+//
+//  Bodies are DOM in the renderer; everything that needs the OS lives here:
+//  reading the Desktop, hiding the real icons, and — because a window in the
+//  wallpaper layer can never receive mouse input — forwarding the global
+//  cursor so the bodies can be hovered and clicked.
+// ---------------------------------------------------------------------------
+let orbitItems = [];
+let orbitLoading = null;    // in-flight loadOrbitItems(), so IPC can wait on it
+let unwatchDesktop = null;
+let iconsHiddenByUs = false;
+
+function orbitActive() {
+  return config.orbitLauncher && currentMode !== 'window';
+}
+
+function loadOrbitItems() {
+  orbitLoading = (async () => {
+    if (!config.orbitLauncher) { orbitItems = []; }
+    else {
+      try {
+        orbitItems = await desktopItems.list({ max: 28 });
+      } catch (err) {
+        console.error('[orbit] could not read the desktop:', err.message);
+        orbitItems = [];
+      }
+    }
+    broadcast('orbit-items', orbitItems);
+  })();
+  return orbitLoading;
+}
+
+function watchDesktopFolder() {
+  unwatchDesktop?.();
+  unwatchDesktop = config.orbitLauncher ? desktopItems.watch(loadOrbitItems) : null;
+}
+
+// Everything that has to change when the launcher is turned on or off.
+function applyOrbitConfig() {
+  applyDesktopIcons();
+  startPointerForwarding();
+  watchDesktopFolder();
+  loadOrbitItems();
+}
+
+// Only ever opens something that is actually sitting on the desktop — the
+// renderer sends back a path, and an untrusted one would otherwise be a way to
+// launch anything at all.
+function orbitPathAllowed(p) {
+  return typeof p === 'string' && orbitItems.some((it) => it.path === p);
+}
+
+function launchOrbitItem(p) {
+  if (!orbitPathAllowed(p)) return;
+  shell.openPath(p).then((err) => {
+    if (err) console.error('[orbit] could not open', p, '-', err);
+  });
+}
+
+// Right-click on a body. A full shell context menu would need IContextMenu;
+// the two things actually wanted here are opening the containing folder and
+// getting the real icons back.
+function orbitContextMenu(p, owner) {
+  if (!orbitPathAllowed(p)) return;
+  const item = orbitItems.find((it) => it.path === p);
+  Menu.buildFromTemplate([
+    { label: item.name, enabled: false },
+    { type: 'separator' },
+    { label: 'Open', click: () => launchOrbitItem(p) },
+    { label: 'Show in folder', click: () => shell.showItemInFolder(p) },
+    { type: 'separator' },
+    {
+      label: 'Turn off orbit launcher',
+      click: () => setConfig({ orbitLauncher: false }),
+    },
+  ]).popup(owner && !owner.isDestroyed() ? { window: owner } : {});
+}
+
+// The real icons are hidden only while the launcher is actually on screen.
+// Anything that can end the process restores them (see restoreDesktopIcons).
+function applyDesktopIcons() {
+  if (!desktop.available()) return;
+  const shouldHide = orbitActive() && config.orbitHideIcons && currentMode === 'wallpaper';
+  if (shouldHide && !iconsHiddenByUs) {
+    if (desktop.iconsVisible() === true && desktop.setIconsVisible(false)) {
+      markIconsHidden(true);
+    }
+  } else if (!shouldHide && iconsHiddenByUs) {
+    desktop.setIconsVisible(true);
+    markIconsHidden(false);
+  }
+}
+
+// Persisted, because the state lives in Explorer and outlives us: if this
+// process is killed while the icons are hidden, nothing in the running system
+// remembers that we were the ones who hid them.
+function markIconsHidden(hidden) {
+  iconsHiddenByUs = hidden;
+  if (config.orbitIconsHidden !== hidden) {
+    config.orbitIconsHidden = hidden;
+    saveConfig();
+  }
+}
+
+// Adopt a hidden state left behind by a previous run so the normal path can
+// put the icons back. (If they should stay hidden, applyDesktopIcons leaves
+// them alone.) Worst case the user can always restore them by hand:
+// right-click the desktop -> View -> Show desktop icons.
+function recoverDesktopIcons() {
+  if (config.orbitIconsHidden) iconsHiddenByUs = true;
+}
+
+function restoreDesktopIcons() {
+  if (!iconsHiddenByUs) return;
+  try { desktop.setIconsVisible(true); } catch { /* best effort */ }
+  markIconsHidden(false);
+}
+
+// --- pointer forwarding ----------------------------------------------------
+let pointerTimer = null;
+let prevLeft = false;
+let prevRight = false;
+let pressOrigin = null;
+
+function stopPointerForwarding() {
+  clearInterval(pointerTimer);
+  pointerTimer = null;
+  prevLeft = prevRight = false;
+  pressOrigin = null;
+}
+
+function startPointerForwarding() {
+  stopPointerForwarding();
+  if (currentMode !== 'wallpaper' || !config.orbitLauncher || !desktop.available()) return;
+  // Read-only sampling: GetCursorPos / GetAsyncKeyState / WindowFromPoint.
+  // Nothing is hooked and nothing is injected, so no other app is affected.
+  pointerTimer = setInterval(pollPointer, 16);
+}
+
+// Screen pixels -> { window, x, y } in that window's CSS pixels.
+function windowPointFor(screenPt) {
+  const dip = screen.screenToDipPoint(screenPt);
+  const all = [{ win, display: winDisplay }, ...wins];
+  for (const { win: w, display } of all) {
+    if (!w || w.isDestroyed() || !display) continue;
+    const b = display.bounds;
+    if (dip.x >= b.x && dip.x < b.x + b.width && dip.y >= b.y && dip.y < b.y + b.height) {
+      return { win: w, x: dip.x - b.x, y: dip.y - b.y };
+    }
+  }
+  return null;
+}
+
+function pollPointer() {
+  const p = desktop.pointerState();
+  if (!p) return;
+
+  const hit = p.onDesktop ? windowPointFor({ x: p.x, y: p.y }) : null;
+
+  for (const w of allWindows()) {
+    w.webContents.send('desktop-pointer',
+      hit && hit.win === w ? { x: hit.x, y: hit.y } : null);
+  }
+
+  const edge = (down, prev, button) => {
+    if (down && !prev) {
+      pressOrigin = { x: p.x, y: p.y, at: Date.now(), onDesktop: p.onDesktop, button };
+    } else if (!down && prev && pressOrigin && pressOrigin.button === button) {
+      const o = pressOrigin;
+      pressOrigin = null;
+      // A click, not a drag or a long press: both ends on the desktop, close
+      // together in space and time.
+      const moved = Math.hypot(p.x - o.x, p.y - o.y);
+      if (o.onDesktop && p.onDesktop && moved < 8 && Date.now() - o.at < 800 && hit) {
+        hit.win.webContents.send('desktop-click', { x: hit.x, y: hit.y, button });
+      }
+    }
+  };
+
+  edge(p.left, prevLeft, 'left');
+  edge(p.right, prevRight, 'right');
+  prevLeft = p.left;
+  prevRight = p.right;
+}
+
+function broadcast(channel, payload) {
+  for (const w of allWindows()) w.webContents.send(channel, payload);
 }
 
 // Windows clamps a new top-level window to the monitor *work area*, so a
@@ -579,6 +790,48 @@ function buildTray() {
       click: (i) => setConfig({ showNowPlaying: i.checked }),
     },
     {
+      label: 'Show lyrics',
+      type: 'checkbox',
+      checked: config.showLyrics,
+      click: (i) => setConfig({ showLyrics: i.checked }),
+    },
+    {
+      label: 'Orbit launcher',
+      submenu: [
+        {
+          label: 'Put desktop shortcuts in orbit',
+          type: 'checkbox',
+          checked: config.orbitLauncher,
+          click: (i) => setConfig({ orbitLauncher: i.checked }),
+        },
+        {
+          label: 'Hide the real desktop icons',
+          type: 'checkbox',
+          checked: config.orbitHideIcons,
+          enabled: config.orbitLauncher,
+          click: (i) => setConfig({ orbitHideIcons: i.checked }),
+        },
+        { type: 'separator' },
+        {
+          label: 'Orbit size',
+          submenu: radio([
+            [0.75, 'Tight'],
+            [1.0, 'Normal'],
+            [1.25, 'Wide'],
+          ], config.orbitScale, (v) => setConfig({ orbitScale: v })),
+        },
+        {
+          label: 'Orbit speed',
+          submenu: radio([
+            [0, 'Still'],
+            [0.5, 'Slow'],
+            [1.0, 'Normal'],
+            [1.8, 'Brisk'],
+          ], config.orbitSpeed, (v) => setConfig({ orbitSpeed: v })),
+        },
+      ],
+    },
+    {
       label: 'Span all monitors',
       type: 'checkbox',
       checked: config.allMonitors,
@@ -705,6 +958,9 @@ function startNowPlaying() {
         nowPlaying = next;
         for (const w of allWindows()) w.webContents.send('nowplaying', nowPlaying);
         if (changed) buildTray();
+        // Keyed on the track's identity, not on `changed` — pausing must not
+        // throw the lyrics away and re-fetch them on resume.
+        refreshLyrics();
       } catch {
         console.error('[nowplaying] unparseable line:', line.slice(0, 200));
       }
@@ -745,6 +1001,74 @@ function mediaCommand(cmd) {
   }
 }
 
+// ---------------------------------------------------------------------------
+//  Lyrics
+//
+//  Looked up once per track and pushed to the renderer whole; the renderer
+//  owns the timing, since it already advances the playback clock locally
+//  between the watcher's once-a-second updates.
+// ---------------------------------------------------------------------------
+let lyrics = null;        // { lines, plain, source, track } or null
+let lyricsTrack = '';     // identity of whatever `lyrics` describes
+let lyricsAbort = null;
+let lyricsRetry = null;
+
+function trackIdentity(np) {
+  if (!np || np.kind !== 'media' || !np.title) return '';
+  return `${np.artist || ''}|${np.title}|${np.album || ''}|${Math.round(np.duration || 0)}`;
+}
+
+// Called on every track change, and again when the lyrics toggle flips.
+function refreshLyrics() {
+  const id = config.showLyrics ? trackIdentity(nowPlaying) : '';
+
+  if (id === lyricsTrack) return;
+  lyricsTrack = id;
+
+  lyricsAbort?.abort();
+  lyricsAbort = null;
+  clearTimeout(lyricsRetry);
+  lyrics = null;
+  broadcast('lyrics', null);
+  if (id) lookupLyrics(id, {
+    artist: nowPlaying.artist,
+    title: nowPlaying.title,
+    album: nowPlaying.album,
+    duration: nowPlaying.duration,
+  }, true);
+}
+
+function lookupLyrics(id, track, mayRetry) {
+  const ctrl = new AbortController();
+  lyricsAbort = ctrl;
+
+  fetchLyrics(track, { signal: ctrl.signal }).then((res) => {
+    // The song can change while the request is in flight.
+    if (ctrl !== lyricsAbort) return;
+    lyricsAbort = null;
+    lyrics = res && (res.synced?.length || res.plain)
+      ? { lines: res.synced, plain: res.plain, source: res.source, track: id }
+      : null;
+
+    // LRCLIB intermittently answers a perfectly good query with nothing at
+    // all under repeated requests. One retry turns that from "this song has
+    // no lyrics for the next four minutes" into a barely noticeable delay.
+    if (!lyrics && mayRetry) {
+      lyricsRetry = setTimeout(() => {
+        if (lyricsTrack === id) lookupLyrics(id, track, false);
+      }, 4000);
+      return;
+    }
+
+    console.log('[lyrics]', track.title, '-',
+      lyrics ? `${lyrics.lines ? lyrics.lines.length + ' synced lines' : 'unsynced'} from ${lyrics.source}`
+        : 'no match');
+    broadcast('lyrics', lyrics);
+  }).catch((err) => {
+    if (err.name !== 'AbortError') console.warn('[lyrics]', err.message);
+  });
+}
+
 // One-line summary for the tray tooltip / menu header.
 function nowPlayingLabel() {
   const np = nowPlaying;
@@ -761,6 +1085,19 @@ function setupIpc() {
   ipcMain.handle('get-settings', () => ({ ...config, forceDemo, shotMode: !!shotPath }));
   ipcMain.handle('get-mode', () => currentMode);
   ipcMain.handle('get-nowplaying', () => nowPlaying);
+  // Pulled rather than only pushed: a mode change builds brand new windows,
+  // which would otherwise have missed the broadcasts that came before them.
+  // Awaits any load still running — the shell icon lookups take long enough
+  // that a renderer starting up will otherwise reliably beat them and show an
+  // empty orbit until the desktop next changes.
+  ipcMain.handle('get-orbit-items', async () => {
+    try { await orbitLoading; } catch { /* the load logs its own failures */ }
+    return orbitItems;
+  });
+  ipcMain.handle('get-lyrics', () => lyrics);
+  ipcMain.on('orbit-launch', (_e, p) => launchOrbitItem(p));
+  ipcMain.on('orbit-context', (e, p) =>
+    orbitContextMenu(p, BrowserWindow.fromWebContents(e.sender)));
   ipcMain.handle('set', (_e, key, value) => {
     if (key in DEFAULTS) setConfig({ [key]: value });
   });
@@ -845,9 +1182,12 @@ if (!app.requestSingleInstanceLock()) {
     screen.on('display-added', refreshGeometry);
     screen.on('display-removed', refreshGeometry);
 
+    recoverDesktopIcons();
     createWindow(config.mode);
     buildTray();
     startNowPlaying();
+    watchDesktopFolder();
+    loadOrbitItems();
 
     // Belt and braces: the listeners above only fire on a *change*. If a
     // monitor was already mid-renegotiation when getAllDisplays() was first
@@ -887,10 +1227,26 @@ if (!app.requestSingleInstanceLock()) {
   app.on('will-quit', () => {
     globalShortcut.unregisterAll();
     stopNowPlaying();
+    stopPointerForwarding();
+    unwatchDesktop?.();
+    lyricsAbort?.abort();
+    clearTimeout(lyricsRetry);
     clearTimeout(refreshGeometryTimer);
     clearTimeout(rebuildTimer);
+    // Leaving someone's desktop icons hidden is the one failure here that
+    // outlives the process, so it gets its own attempt before anything else
+    // in teardown can throw.
+    restoreDesktopIcons();
     if (currentMode === 'wallpaper') {
       for (const w of allWindows()) { try { wallpaper.detach(w); } catch { /* ignore */ } }
     }
+  });
+
+  // Same reason: an unhandled throw would otherwise take the process down with
+  // the desktop still emptied out.
+  process.on('uncaughtException', (err) => {
+    console.error('[fatal]', err);
+    restoreDesktopIcons();
+    process.exit(1);
   });
 }

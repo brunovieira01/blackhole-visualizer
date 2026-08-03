@@ -10,6 +10,16 @@
 <body>
   <canvas id="gl"></canvas>
 
+  <!-- Desktop shortcuts, in orbit. Populated by src/orbit.js. -->
+  <div id="orbit" class="orbit"></div>
+
+  <!-- Synced lyrics. Three lines: previous, current, next. -->
+  <div id="lyrics" class="lyrics">
+    <div class="lyric prev" id="lyric-prev"></div>
+    <div class="lyric cur" id="lyric-cur"></div>
+    <div class="lyric next" id="lyric-next"></div>
+  </div>
+
   <div id="np" class="np">
     <div class="np-meter"><i></i><i></i><i></i><i></i><i></i></div>
     <div class="np-body">
@@ -55,7 +65,8 @@
     <div class="hud-keys">
       <b>H</b> hud &nbsp; <b>1–6</b> theme &nbsp; <b>N</b> now playing &nbsp; <b>F</b> fullscreen<br />
       <b>↑↓</b> reactivity &nbsp; <b>←→</b> wave depth &nbsp; <b>drag</b> orbit<br />
-      <b>space</b> play/pause &nbsp; <b>,</b> prev &nbsp; <b>.</b> next
+      <b>space</b> play/pause &nbsp; <b>,</b> prev &nbsp; <b>.</b> next<br />
+      <b>O</b> orbit launcher &nbsp; <b>L</b> lyrics
     </div>
   </div>
 

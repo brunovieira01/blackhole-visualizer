@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8" /><title>fake track</title></head>
+<body style="background:#111;color:#ccc;font:13px monospace;padding:16px">
+<pre id="log">starting…</pre>
+<script>
+// A completely silent WAV, looped. Chromium registers a media session for any
+// playing unmuted audio track without inspecting the samples, so this gives a
+// real SMTC session that makes no noise on the machine running the test.
+function silentWav(seconds = 4, rate = 8000) {
+  const n = seconds * rate;
+  const buf = new ArrayBuffer(44 + n * 2);
+  const v = new DataView(buf);
+  const ascii = (off, s) => { for (let i = 0; i < s.length; i++) v.setUint8(off + i, s.charCodeAt(i)); };
+  ascii(0, 'RIFF'); v.setUint32(4, 36 + n * 2, true); ascii(8, 'WAVEfmt ');
+  v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+  v.setUint32(24, rate, true); v.setUint32(28, rate * 2, true);
+  v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+  ascii(36, 'data'); v.setUint32(40, n * 2, true);
+  return URL.createObjectURL(new Blob([buf], { type: 'audio/wav' }));
+}
+
+const p = new URLSearchParams(location.search);
+const meta = {
+  title: p.get('title') || 'Instant Crush',
+  artist: p.get('artist') || 'Daft Punk',
+  album: p.get('album') || 'Random Access Memories',
+};
+const duration = Number(p.get('duration') || 337);
+const start = Number(p.get('position') || 30);
+
+const log = document.getElementById('log');
+const say = (m) => { log.textContent += '\n' + m; console.log(m); };
+
+const audio = new Audio(silentWav());
+audio.loop = true;
+audio.volume = 1;              // muted tracks do not get a media session
+
+audio.play().then(() => {
+  navigator.mediaSession.metadata = new MediaMetadata(meta);
+  navigator.mediaSession.playbackState = 'playing';
+
+  // The position SMTC reports comes from here, not from the silent element,
+  // so the lyrics line up with a real point in the song.
+  const t0 = performance.now();
+  const push = () => {
+    const position = Math.min(duration, start + (performance.now() - t0) / 1000);
+    navigator.mediaSession.setPositionState({ duration, playbackRate: 1, position });
+  };
+  push();
+  setInterval(push, 1000);
+
+  for (const a of ['play', 'pause', 'nexttrack', 'previoustrack', 'seekto']) {
+    navigator.mediaSession.setActionHandler(a, (d) => say('action: ' + a +
+      (d && d.seekTime != null ? ' ' + d.seekTime.toFixed(2) : '')));
+  }
+  say(`session up: ${meta.artist} - ${meta.title} @ ${start}s of ${duration}s`);
+}).catch((err) => say('play failed: ' + err.message));
+</script>
+</body>
+</html>

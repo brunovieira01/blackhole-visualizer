@@ -11,7 +11,9 @@
     "overlay": "electron . --mode=overlay",
     "window": "electron . --mode=window",
     "shot": "electron . --mode=window --shot",
-    "test": "node tools/test-analysis.mjs && node tools/test-capture.mjs"
+    "test": "node tools/test-analysis.mjs && node tools/test-capture.mjs",
+    "test:lyrics": "node tools/test-lyrics.mjs",
+    "probe-desktop": "electron tools/probe-desktop.js"
   },
   "devDependencies": {
     "electron": "^43.2.0"

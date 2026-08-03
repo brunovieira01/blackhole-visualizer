@@ -510,7 +510,9 @@ async function main() {
   // Main forwards the global cursor instead; everywhere else the elements get
   // ordinary pointer events.
   orbit.setSynthetic(mode === 'wallpaper');
-  if (mode === 'wallpaper') document.body.classList.add('forwarded');
+  // Only claim the transport is usable if main is actually forwarding the
+  // cursor; without koffi it isn't, and the buttons would be dead on screen.
+  if (initialSettings.pointerForwarding) document.body.classList.add('forwarded');
   bridge?.onDesktopPointer((p) => { orbit.pointer(p); transportHover(p); });
   bridge?.onDesktopClick((p) => {
     if (p.button !== 'left') return;

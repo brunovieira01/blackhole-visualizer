@@ -1082,7 +1082,15 @@ function nowPlayingLabel() {
 //  IPC
 // ---------------------------------------------------------------------------
 function setupIpc() {
-  ipcMain.handle('get-settings', () => ({ ...config, forceDemo, shotMode: !!shotPath }));
+  ipcMain.handle('get-settings', () => ({
+    ...config,
+    forceDemo,
+    shotMode: !!shotPath,
+    // Whether the renderer can expect forwarded pointer events. Without
+    // koffi there is no cursor sampling, so the on-screen transport would be
+    // shown dead in wallpaper mode rather than merely unclickable.
+    pointerForwarding: currentMode === 'wallpaper' && desktop.available(),
+  }));
   ipcMain.handle('get-mode', () => currentMode);
   ipcMain.handle('get-nowplaying', () => nowPlaying);
   // Pulled rather than only pushed: a mode change builds brand new windows,

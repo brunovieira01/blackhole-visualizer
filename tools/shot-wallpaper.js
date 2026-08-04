@@ -80,9 +80,17 @@ function main() {
   const user32 = koffi.load('user32.dll');
   const gdi32 = koffi.load('gdi32.dll');
 
-  const RECT = koffi.struct('RECT', {
-    left: 'int32', top: 'int32', right: 'int32', bottom: 'int32',
-  });
+  // koffi's type registry is global to the process, and native/desktop.js has
+  // already registered RECT by the time we get here — re-declaring it throws.
+  // A registered struct can be referenced by name, so fall back to that.
+  let RECT;
+  try {
+    RECT = koffi.struct('RECT', {
+      left: 'int32', top: 'int32', right: 'int32', bottom: 'int32',
+    });
+  } catch {
+    RECT = 'RECT';
+  }
   // BITMAPINFOHEADER followed by the colour table we don't use.
   const BITMAPINFOHEADER = koffi.struct('BITMAPINFOHEADER', {
     biSize: 'uint32', biWidth: 'int32', biHeight: 'int32',

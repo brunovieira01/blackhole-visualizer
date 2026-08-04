@@ -28,7 +28,12 @@ const desktopItems = require('./lib/desktop-items');
 const { fetchLyrics } = require('./lib/lyrics');
 
 // GPU-friendly defaults for something that runs all day in the background.
-app.commandLine.appendSwitch('enable-gpu-rasterization');
+// --no-gpu-raster is a diagnostic escape hatch: on a machine where Chromium
+// has fallen back to software compositing, forcing GPU rasterization can cost
+// far more than it saves.
+if (!process.argv.includes('--no-gpu-raster')) {
+  app.commandLine.appendSwitch('enable-gpu-rasterization');
+}
 app.disableDomainBlockingFor3DAPIs?.();
 
 const MODES = ['wallpaper', 'overlay', 'window'];
@@ -70,6 +75,10 @@ const DEFAULTS = {
   allMonitors: false,
   idleThrottle: true,
   launchAtLogin: false,
+  // requestAnimationFrame runs at the monitor's refresh rate, so on a 165 Hz
+  // screen the wallpaper was rendering 165 full-resolution frames a second
+  // behind whatever was on top of it. It's scenery; 30 is plenty.
+  frameCap: 30,
 
   // Desktop shortcuts drawn as bodies orbiting the hole. Off by default
   // because turning it on hides the real desktop icons, and a fresh clone
@@ -93,6 +102,10 @@ const DEFAULTS = {
 // --demo-audio: ignore capture and drive the visuals from a synthetic beat.
 // Handy for testing, and for anyone whose machine has no loopback at all.
 let forceDemo = false;
+
+// Set by --mode=/--shot for this run only; never persisted. Use startupMode().
+let modeOverride = null;
+const startupMode = () => modeOverride || config.mode;
 
 let config = { ...DEFAULTS };
 let configPath;
@@ -162,6 +175,8 @@ function saveConfig() {
 }
 
 function setConfig(patch, { recreate = false } = {}) {
+  // An explicit choice from the tray beats whatever this run was started with.
+  if ('mode' in patch) modeOverride = null;
   Object.assign(config, patch);
   saveConfig();
   if (recreate) createWindow(config.mode);
@@ -361,6 +376,7 @@ function createWindow(mode) {
   desktop.invalidate();     // WorkerW set changes when we re-attach
   applyDesktopIcons();
   startPointerForwarding();
+  startCoveredWatch();
 }
 
 // ---------------------------------------------------------------------------
@@ -551,6 +567,34 @@ function pollPointer() {
 
 function broadcast(channel, payload) {
   for (const w of allWindows()) w.webContents.send(channel, payload);
+}
+
+// --- occlusion -------------------------------------------------------------
+// Chromium throttles occluded windows, but a window reparented into WorkerW is
+// never occluded as far as the compositor is concerned — so without this the
+// scene renders at full rate under a maximized window indefinitely. Polled
+// rather than hooked: two cheap Win32 reads twice a second beats a WinEvent
+// hook that would fire on every foreground change on the machine.
+let coveredTimer = null;
+const coveredState = new WeakMap();
+
+function stopCoveredWatch() {
+  clearInterval(coveredTimer);
+  coveredTimer = null;
+}
+
+function startCoveredWatch() {
+  stopCoveredWatch();
+  if (currentMode !== 'wallpaper' || !desktop.available()) return;
+  coveredTimer = setInterval(() => {
+    for (const { win: w, display } of [{ win, display: winDisplay }, ...wins]) {
+      if (!w || w.isDestroyed() || !display) continue;
+      const now = desktop.displayCovered(screen.dipToScreenRect(null, display.bounds));
+      if (coveredState.get(w) === now) continue;
+      coveredState.set(w, now);
+      w.webContents.send('covered', now);
+    }
+  }, 500);
 }
 
 // Windows clamps a new top-level window to the monitor *work area*, so a
@@ -909,6 +953,15 @@ function buildTray() {
       click: (i) => setConfig({ idleThrottle: i.checked }),
     },
     {
+      label: 'Frame rate',
+      submenu: radio([
+        [15, '15 fps  (barely there)'],
+        [30, '30 fps  (default)'],
+        [60, '60 fps'],
+        [144, 'Unlimited  (matches your monitor)'],
+      ], config.frameCap, (v) => setConfig({ frameCap: v })),
+    },
+    {
       // Only worth enabling if loopback genuinely doesn't work on this machine.
       label: 'Allow microphone input (off by default)',
       type: 'checkbox',
@@ -922,7 +975,7 @@ function buildTray() {
       checked: config.launchAtLogin,
       click: (i) => setConfig({ launchAtLogin: setAutoStart(i.checked) }),
     },
-    { label: 'Restart visualizer', click: () => createWindow(config.mode) },
+    { label: 'Restart visualizer', click: () => createWindow(startupMode()) },
     { label: 'Open config folder', click: () => shell.showItemInFolder(configPath) },
     { type: 'separator' },
     { label: 'Quit', click: () => { quitting = true; app.quit(); } },
@@ -1215,7 +1268,7 @@ if (!app.requestSingleInstanceLock()) {
     // launch is swallowed by the lock and the app looks like it simply
     // won't start, with only a tray icon to show for it.
     if (!win || win.isDestroyed()) {
-      createWindow(config.mode);
+      createWindow(startupMode());
       return;
     }
     if (currentMode === 'window') { win.show(); win.focus(); }
@@ -1229,11 +1282,14 @@ if (!app.requestSingleInstanceLock()) {
   app.whenReady().then(() => {
     loadConfig();
 
-    // CLI overrides: --mode=wallpaper|overlay|window, --shot[=path]
+    // CLI overrides: --mode=wallpaper|overlay|window, --shot[=path].
+    // Kept out of `config` deliberately. Writing them there meant a one-off
+    // `--mode=window` run silently became the user's saved mode as soon as
+    // anything else called saveConfig() — so a test left the wallpaper off.
     const argMode = process.argv.find((a) => a.startsWith('--mode='));
     if (argMode) {
       const m = argMode.slice(7);
-      if (MODES.includes(m)) config.mode = m;
+      if (MODES.includes(m)) modeOverride = m;
     }
     forceDemo = process.argv.includes('--demo-audio');
 
@@ -1242,7 +1298,7 @@ if (!app.requestSingleInstanceLock()) {
       shotPath = argShot.includes('=')
         ? argShot.split('=').slice(1).join('=')
         : path.join(app.getPath('desktop'), 'blackhole.png');
-      config.mode = 'window';
+      modeOverride = 'window';
     }
 
     setupCapture();
@@ -1259,7 +1315,7 @@ if (!app.requestSingleInstanceLock()) {
     screen.on('display-removed', refreshGeometry);
 
     recoverDesktopIcons();
-    createWindow(config.mode);
+    createWindow(startupMode());
     buildTray();
     startNowPlaying();
     watchDesktopFolder();
@@ -1304,6 +1360,7 @@ if (!app.requestSingleInstanceLock()) {
     globalShortcut.unregisterAll();
     stopNowPlaying();
     stopPointerForwarding();
+    stopCoveredWatch();
     unwatchDesktop?.();
     lyricsAbort?.abort();
     clearTimeout(lyricsRetry);

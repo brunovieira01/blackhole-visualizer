@@ -114,6 +114,14 @@ const QUALITY_PRESETS = {
 const WARP_STEPS = [0, 0.55, 1.0, 1.7, 2.6];
 const WARP_LABELS = ['off', 'subtle', 'normal', 'strong', 'turbulent'];
 
+// Frame rates. The wallpaper is scenery, not a game — 30 is smooth for slow
+// ambient motion, and the two throttles below cost nothing to keep.
+const IDLE_FPS = 12;      // nothing audible
+const COVERED_FPS = 4;    // completely hidden behind a window
+
+let maxFps = 30;
+let covered = false;
+
 let renderer;
 let audio;
 let orbit;
@@ -363,6 +371,10 @@ function applySettings(s) {
     tint: settings.orbitTintIcons !== false,
   });
 
+  // Only the passive modes are capped. A window you have deliberately opened
+  // and are dragging the camera around in should run as fast as it can.
+  maxFps = mode === 'window' ? 1000 : Math.max(5, settings.frameCap ?? 30);
+
   applyAccent(theme.hot);
   renderNowPlaying();
   renderLyrics();
@@ -390,7 +402,12 @@ const autoQuality = {
   cooldown: 2.0,
 };
 
-function tuneQuality(dt) {
+// `target` is the frame rate we're actually asking for. Comparing against a
+// hardcoded 60 was wrong in both directions: on a 165 Hz screen every sample
+// beat it, so quality climbed to maximum and stayed pinned there; and while
+// idling or hidden the deliberately low rate read as "struggling" and quality
+// would be thrown away for no reason.
+function tuneQuality(dt, target) {
   if (!autoQuality.enabled) return;
   autoQuality.acc += dt;
   autoQuality.frames++;
@@ -401,13 +418,18 @@ function tuneQuality(dt) {
   autoQuality.acc = 0;
   autoQuality.frames = 0;
   if (autoQuality.cooldown > 0) return;
+  // Uncapped (window mode) still aims at 60 — without the ceiling, "we're
+  // below target" would be true forever and quality would be thrown away.
+  target = Math.min(target, 60);
+  // And while idling or hidden the low rate is deliberate, not a struggle.
+  if (target < 24) return;
 
-  if (fps < 42) {
+  if (fps < target * 0.7) {
     if (renderer.renderScale > 0.6) renderer.renderScale = Math.max(0.6, renderer.renderScale - 0.1);
     else if (renderer.steps > 120) renderer.steps -= 40;
     else return;
     autoQuality.cooldown = 2.5;
-  } else if (fps > 58) {
+  } else if (fps > target * 0.96) {
     if (renderer.steps < 300) renderer.steps += 25;
     else if (renderer.renderScale < 1.0) renderer.renderScale = Math.min(1.0, renderer.renderScale + 0.05);
     else return;
@@ -672,6 +694,8 @@ async function main() {
   setLyrics(await bridge?.getLyrics());
   bridge?.onLyrics((l) => setLyrics(l));
 
+  bridge?.onCovered((v) => { covered = !!v; });
+
   if (mode === 'window') {
     bindInteraction();
     bindTransport();
@@ -711,28 +735,40 @@ async function main() {
     last = now;
     time += dt;
 
+    // Analysis stays at full rate whatever the frame rate is: onset detection
+    // is a per-update spectral flux, so sampling it at 4 fps would quietly
+    // change what counts as a beat.
     const a = audio.update(dt);
 
-    // Both run above the idle throttle: the launcher has to stay hoverable
-    // and the lyrics have to keep flowing through a quiet passage, neither of
-    // which costs anything next to the shader.
-    orbit.layout(dt, a);
+    // Lyrics are cheap (they early-out unless the line changed) and are the
+    // one thing here that has to stay on time even when nothing is rendering.
     renderLyrics();
 
-    // Nothing playing? Idle down to ~12 fps instead of burning the GPU on a
-    // still image. Any sound at all brings it straight back.
+    // Nothing audible? Idle down instead of burning the GPU on a still image.
     silence = a.level < 0.035 ? silence + dt : 0;
-    if ((settings.idleThrottle ?? true) && silence > 6) {
-      skipAcc += dt;
-      if (skipAcc < 1 / 12) { requestAnimationFrame(frame); return; }
-      skipAcc = 0;
-    }
+    const idle = (settings.idleThrottle ?? true) && silence > 6;
 
-    renderer.render(dt, time, a);
-    tuneQuality(dt);
+    // requestAnimationFrame follows the *monitor*. On a 165 Hz screen that
+    // meant 165 full-resolution ray-marched frames a second, forever, behind
+    // whatever was on top — two cores' worth for something nobody was looking
+    // at. Nothing about a wallpaper needs more than 30.
+    const target = covered ? COVERED_FPS : idle ? IDLE_FPS : maxFps;
+    skipAcc += dt;
+    // A little slack, or a 60 fps cap lands just under the vsync interval and
+    // drops every other frame to 30.
+    if (skipAcc < 1 / target - 0.0005) { requestAnimationFrame(frame); return; }
+    const frameDt = skipAcc;
+    skipAcc = 0;
+
+    orbit.layout(frameDt, a);
+    renderer.render(frameDt, time, a);
+    tuneQuality(frameDt, target);
 
     // Five little equaliser bars beside the track name, riding the spectrum.
-    meterAcc += dt;
+    // frameDt, not dt: everything below here only runs on frames that actually
+    // rendered, so accumulating the per-rAF delta would undercount elapsed time
+    // by the skip factor and slow these to a crawl under a low frame cap.
+    meterAcc += frameDt;
     if (meterAcc >= 1 / 24 && np.bars.length) {
       meterAcc = 0;
       tickProgress();
@@ -745,11 +781,12 @@ async function main() {
       }
     }
 
-    fpsAcc += dt;
+    fpsAcc += frameDt;
     fpsFrames++;
     if (fpsAcc >= 0.5) {
       els.fps.textContent =
-        `${Math.round(fpsFrames / fpsAcc)} · ${Math.round(renderer.renderScale * 100)}% · ${renderer.steps}`;
+        `${Math.round(fpsFrames / fpsAcc)}/${target} · ` +
+        `${Math.round(renderer.renderScale * 100)}% · ${renderer.steps}`;
       fpsAcc = 0;
       fpsFrames = 0;
     }

@@ -22,6 +22,10 @@ contextBridge.exposeInMainWorld('bhv', {
   getLyrics: () => ipcRenderer.invoke('get-lyrics'),
   onLyrics: (fn) => ipcRenderer.on('lyrics', (_e, l) => fn(l)),
 
+  // True while this window's monitor is fully covered by another window, so
+  // the renderer can stop drawing frames nobody can see.
+  onCovered: (fn) => ipcRenderer.on('covered', (_e, v) => fn(v)),
+
   setInteractive: (on) => ipcRenderer.send('interactive', on),
   reportSource: (src) => ipcRenderer.send('source', src),
   hide: () => ipcRenderer.send('hide'),

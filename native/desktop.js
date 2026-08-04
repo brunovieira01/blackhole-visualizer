@@ -30,6 +30,9 @@ function load() {
     const koffi = require('koffi');
     const user32 = koffi.load('user32.dll');
     const POINT = koffi.struct('POINT', { x: 'int32', y: 'int32' });
+    const RECT = koffi.struct('RECT', {
+      left: 'int32', top: 'int32', right: 'int32', bottom: 'int32',
+    });
 
     api = {
       koffi,
@@ -45,6 +48,10 @@ function load() {
       WindowFromPoint: user32.func('__stdcall', 'WindowFromPoint', 'uintptr_t', [POINT]),
       GetAncestor: user32.func('__stdcall', 'GetAncestor', 'uintptr_t', ['uintptr_t', 'uint32']),
       GetAsyncKeyState: user32.func('__stdcall', 'GetAsyncKeyState', 'int16', ['int32']),
+      GetForegroundWindow: user32.func('__stdcall', 'GetForegroundWindow', 'uintptr_t', []),
+      GetWindowRect: user32.func('__stdcall', 'GetWindowRect', 'bool',
+        ['uintptr_t', koffi.out(koffi.pointer(RECT))]),
+      IsIconic: user32.func('__stdcall', 'IsIconic', 'bool', ['uintptr_t']),
     };
   } catch (err) {
     loadError = err;
@@ -170,8 +177,43 @@ function pointerState() {
   };
 }
 
+/**
+ * Is the wallpaper on this monitor completely hidden behind a window?
+ *
+ * Chromium will not tell us: it throttles occluded windows, but a window
+ * reparented into WorkerW is never "occluded" as far as the compositor is
+ * concerned, so the scene keeps rendering at full rate underneath a maximized
+ * browser for hours. This catches the case that actually matters — one window
+ * covering the whole screen — rather than trying to solve general occlusion,
+ * which would mean walking the whole z-order every tick.
+ *
+ * @param {{x:number,y:number,width:number,height:number}} bounds monitor rect,
+ *        in physical pixels
+ */
+function displayCovered(bounds) {
+  const a = load();
+  if (!a || !bounds) return false;
+
+  const fg = a.GetForegroundWindow();
+  if (!fg || a.IsIconic(fg)) return false;
+  // The desktop itself being in front means nothing is covering us.
+  const root = a.GetAncestor(fg, GA_ROOT) || fg;
+  if (desktopRoots().has(root)) return false;
+
+  const r = {};
+  if (!a.GetWindowRect(fg, r)) return false;
+
+  // A pixel of slack each way: maximized windows sit a hair outside the
+  // monitor, and a window one pixel short is not meaningfully less covering.
+  return r.left <= bounds.x + 1 &&
+    r.top <= bounds.y + 1 &&
+    r.right >= bounds.x + bounds.width - 1 &&
+    r.bottom >= bounds.y + bounds.height - 1;
+}
+
 module.exports = {
   available,
+  displayCovered,
   findDesktop,
   iconsVisible,
   setIconsVisible,

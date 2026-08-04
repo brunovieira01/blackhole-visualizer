@@ -229,7 +229,33 @@ float diskDist(vec3 p) {
 }
 
 // ---- background: stars + nebula, sampled by the *bent* ray direction ------
-vec3 starLayer(vec3 d, float scale, float density, float bright, vec3 tint) {
+
+// Stars are not white dots. Their colour follows a blackbody curve set by
+// surface temperature, which is what the spectral classes name: M red dwarfs,
+// K orange, G yellow (our Sun), A white, B/O blue. Sampling that ramp instead
+// of tinting white is most of the difference between "space" and "static".
+// t runs 0 (coolest, red) to 1 (hottest, blue).
+vec3 starColor(float t) {
+  const vec3 M = vec3(1.00, 0.26, 0.10);   // red
+  const vec3 K = vec3(1.00, 0.56, 0.24);   // orange
+  const vec3 G = vec3(1.00, 0.92, 0.56);   // yellow
+  const vec3 A = vec3(0.96, 0.98, 1.00);   // white
+  const vec3 B = vec3(0.44, 0.64, 1.00);   // blue
+  // Overlapping smoothsteps rather than branches: continuous, and no class
+  // sits at a hard edge where a hash lands on it more often than its neighbours.
+  vec3 c = mix(M, K, smoothstep(0.00, 0.30, t));
+  c = mix(c, G, smoothstep(0.24, 0.54, t));
+  c = mix(c, A, smoothstep(0.50, 0.78, t));
+  c = mix(c, B, smoothstep(0.74, 1.00, t));
+  return c;
+}
+
+// sharp is the gaussian falloff of a star's core, in cell units. It has to
+// rise with the cell size or a sparse layer (low scale, big cells) paints
+// fuzzy blobs instead of points: the falloff is relative to the cell, so the
+// same number covers far more of the screen when the cells are large.
+// (No backticks in here -- this whole shader lives in a JS template literal.)
+vec3 starLayer(vec3 d, float scale, float density, float bright, float hotShift, float sharp) {
   vec3 p = d * scale;
   vec3 id = floor(p);
   vec3 f  = fract(p);
@@ -242,17 +268,38 @@ vec3 starLayer(vec3 d, float scale, float density, float bright, vec3 tint) {
         if (h.z < density) continue;
         vec3 sp = o + h - f;
         float dist = length(sp);
-        float core = exp(-dist * dist * 34.0);
+        float core = exp(-dist * dist * sharp);
         // Lazy, purely time-based shimmer, each star on its own slow period.
         // Driving this from the treble made the whole sky flicker on hi-hats.
         float tw = 0.74 + 0.26 * sin(uTime * (0.22 + h.x * 0.55) + h.y * TAU);
-        vec3 col = mix(vec3(1.0), tint, h.x * 0.75);
-        col = mix(col, vec3(0.6, 0.75, 1.25), step(0.92, h.y)); // occasional blue giant
-        acc += col * core * bright * max(tw, 0.0) * (0.35 + h.z);
+
+        // Decorrelated from the size/gate components, or colour and brightness
+        // would march together and the sky would band.
+        float spec = fract(h.x * 5.137 + h.y * 2.713 + hotShift);
+        // Pushed away from the middle of the ramp on purpose. A uniform sample
+        // puts most stars in the white classes, where they all look the same;
+        // the point of colouring them at all is to see reds and blues.
+        spec = 0.5 + 0.5 * sign(spec - 0.5) * pow(abs(spec * 2.0 - 1.0), 0.62);
+        vec3 col = starColor(spec);
+
+        // Hot stars really are the brighter ones, and letting the blues carry
+        // a little extra is what stops them being lost among the yellows.
+        float lum = 0.80 + 0.55 * spec * spec;
+
+        acc += col * core * bright * lum * max(tw, 0.0) * (0.35 + h.z);
       }
     }
   }
   return acc;
+}
+
+// Pull a vivid version of the theme's hue out of uNebula. The presets store a
+// dim, desaturated tint (it is used as a wash elsewhere); the sky wants the
+// same hue at full strength, or every theme's nebula comes out muddy grey.
+vec3 nebulaHue(float sat) {
+  vec3 n = uNebula / max(max(uNebula.r, max(uNebula.g, uNebula.b)), 1e-4);
+  float l = dot(n, vec3(0.3333));
+  return max(mix(vec3(l), n, sat), 0.0);
 }
 
 // Normal of the galactic plane. Deliberately tilted well away from the
@@ -294,8 +341,16 @@ vec3 background(vec3 d) {
   dust = smoothstep(0.36, 0.70, dust);
   arm *= 1.0 - dust * 0.92;
 
-  col += vec3(0.72, 0.68, 0.74) * arm * 0.105;
-  col += mix(uNebula, vec3(0.30, 0.30, 0.40), 0.5) * halo * 0.014;
+  // The arm used to be a neutral grey, which is exactly what made the sky read
+  // as a white smear: the brightest parts of it had no hue at all. Colour it by
+  // density instead — thin outskirts hold the theme's hue, and the dense cores
+  // brighten and warm, the way an ionised star cloud actually looks. Same
+  // luminance as before, so the "contrast not brightness" rule still holds.
+  vec3 armThin  = nebulaHue(1.5) * 0.62;
+  vec3 armDense = armThin * 2.2 + vec3(0.30, 0.14, 0.10);
+  vec3 armCol   = mix(armThin, armDense, cloud);
+  col += armCol * arm * 0.115;
+  col += mix(uNebula, vec3(0.26, 0.14, 0.44), 0.6) * halo * 0.015;
 
   // ---- nebulae --------------------------------------------------------
   // Two clouds with different hues and drifts, thresholded hard so they sit as
@@ -307,15 +362,41 @@ vec3 background(vec3 d) {
   float n2 = fbm3(d * 2.6 - vec3(0.0, 4.1, uTime * 0.015), 4);
   n2 = pow(max(n2 - 0.47, 0.0) * 2.6, 2.2);
 
-  col += uNebula * n1 * 0.10;
-  col += vec3(1.00, 0.42, 0.34) * pow(n1, 2.3) * 0.055;
-  col += uNebula.bgr * n2 * 0.060;
-  col += vec3(0.42, 0.62, 1.00) * pow(n2, 2.5) * 0.040;
+  // A third, much larger violet complex filling the space the other two leave
+  // empty. Thresholded hard and multiplied by its own finer noise: a broad
+  // smooth falloff here reads as a flat haze over the whole sky, and the thing
+  // that makes it look like a nebula instead is the filament structure, not
+  // the amount of light.
+  float n3 = fbm3(d * 0.9 + vec3(3.7, 2.4, uTime * 0.006), 4);
+  n3 = pow(max(n3 - 0.46, 0.0) * 2.7, 2.3);
+  float fil = fbm3(d * 5.5 - vec3(1.3, 0.0, uTime * 0.008), 4);
+  // Low floor on purpose: it's the near-black gaps between the filaments that
+  // make this read as structure rather than as a purple wash over everything.
+  n3 *= 0.14 + 1.9 * pow(clamp(fil, 0.0, 1.0), 1.6);
+
+  col += nebulaHue(1.7) * n3 * 0.17;
+  col += mix(nebulaHue(1.4), vec3(1.0), 0.35) * pow(n3, 2.0) * 0.09;
+  col += uNebula * n1 * 0.13;
+  // Emission red (ionised hydrogen) on one core, reflection blue on the other.
+  col += vec3(1.00, 0.30, 0.26) * pow(n1, 2.3) * 0.075;
+  col += uNebula.bgr * n2 * 0.070;
+  col += vec3(0.36, 0.56, 1.00) * pow(n2, 2.5) * 0.055;
 
   // ---- stars ----------------------------------------------------------
-  // Denser inside the arm, which is what sells it as a star cloud.
-  col += starLayer(dNear,  90.0, 0.955 - band * 0.028, 1.00, vec3(1.0, 0.92, 0.80));
-  col += starLayer(dFar,  210.0, 0.972 - band * 0.018, 0.55, vec3(0.85, 0.90, 1.10));
+  // Denser inside the arm, which is what sells it as a star cloud. The far
+  // layer is shifted along the spectral ramp so the two don't draw from the
+  // same colours in the same order and read as one field.
+  col += starLayer(dNear,  90.0, 0.950 - band * 0.030, 1.00, 0.00, 34.0);
+  col += starLayer(dFar,  210.0, 0.970 - band * 0.018, 0.55, 0.37, 34.0);
+
+  // A handful of foreground giants. Every real sky has a few stars that are
+  // obviously coloured — a red Betelgeuse, a blue Rigel — and they are what
+  // you actually notice. Kept moderate rather than bright: ACES desaturates
+  // highlights, so an overdriven star tonemaps to white and the colour is
+  // lost. These stay in range and let the bloom carry the hue instead.
+  // 250 keeps them only slightly larger on screen than an ordinary star:
+  // 34 * (90/26)^2 would match exactly, so this is a deliberate ~1.3x.
+  col += starLayer(dNear, 26.0, 0.9885, 1.35, 0.61, 250.0);
 
   return col;
 }

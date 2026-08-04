@@ -352,9 +352,25 @@ in front and the ring genuinely sits around the black hole in space.
 
 A galactic arm crosses the frame at an angle to the disk, with dark dust lanes cut
 through it — those lanes are what make a star cloud read as the Milky Way rather than a
-bright smudge. Star density rises inside the arm, and two nebulae drift with emission-red
-and reflection-blue cores. It's all built from contrast rather than brightness: the
-average stays near black so the background never greys out behind the disk.
+bright smudge. Star density rises inside the arm, and three nebulae drift: a large violet
+complex plus two smaller ones with emission-red and reflection-blue cores. It's all built
+from contrast rather than brightness: the average stays near black so the background never
+greys out behind the disk, and the near-black gaps between the nebula filaments are what
+stop it becoming a coloured wash.
+
+Nothing up there is a fixed colour. The arm and the big nebula take their hue from the
+current theme, and the arm is coloured *by density* — thin outskirts hold the theme hue,
+dense cores brighten and warm. It used to be a flat neutral grey, which is exactly what
+made the sky read as a white smear: the brightest part of it had no hue at all.
+
+**Stars are not white dots.** Their colour follows the blackbody curve set by surface
+temperature — the spectral classes: M red, K orange, G yellow (our Sun), A white, B/O
+blue. The sampled distribution is deliberately pushed away from the middle of that ramp,
+because a uniform sample puts most stars in the white classes where they all look the
+same. A sparse third layer scatters a few brighter giants, the ones you actually notice
+in a real sky. They're kept moderate rather than blazing: ACES desaturates highlights, so
+an overdriven star tonemaps to white and the colour is lost — the bloom carries the hue
+instead.
 
 Post: HDR half-float targets → bright pass → two ping-pong gaussian blurs → ACES tonemap,
 vignette, and grain.

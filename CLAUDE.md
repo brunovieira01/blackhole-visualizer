@@ -225,7 +225,24 @@ window flags like `transparent` and `focusable` can't be changed after creation.
   inside the frame; `sp.y` runs -1..1, so anything past ~0.90 starts clipping vertically.
 - Background is built from **contrast, not brightness**. If asked to make the sky richer,
   raise the lumpiness (noise gamma, dust-lane depth, nebula cores) and leave the average
-  level alone, or the whole frame greys out behind the disk.
+  level alone, or the whole frame greys out behind the disk. The violet nebula complex is
+  a worked example: its filament term has a *low* floor (0.14) precisely so the gaps go
+  near-black — raising the floor turns it straight back into a flat wash.
+- **`src/shaders.js` is a JS template literal.** A backtick in a GLSL comment ends the
+  string and you get `Uncaught SyntaxError` from *JavaScript*, with a black window and no
+  shader error to go on. Don't quote identifiers with backticks in there.
+- **Nothing in the sky is a fixed colour.** The galactic arm and the big nebula take their
+  hue from `nebulaHue()`, which pulls a vivid version of the theme's `uNebula` (the preset
+  values are dim and desaturated because they're used as a wash elsewhere). Hardcoding a
+  colour there looks right on one theme and clashes on the other five.
+- **Star colour is a blackbody ramp, and the distribution is pushed away from its middle
+  on purpose.** A uniform sample lands most stars in the white classes where they all look
+  identical; the point of colouring them is to see reds and blues. Keep them moderately
+  bright too — ACES desaturates highlights, so an overdriven star tonemaps to white and
+  the colour you just added is thrown away. Let the bloom carry the hue.
+- **`starLayer`'s `sharp` must rise as `scale` falls.** The gaussian falloff is in *cell*
+  units, so a sparse layer with big cells paints fuzzy blobs at the same value that gives
+  crisp points in a dense one.
 - Config defaults are versioned (`CONFIG_VERSION` + `migrateConfig`). The file is only
   written on a tray interaction, so a user may have no config at all — but once written,
   it freezes every value, and changing a default later needs a migration to reach them.

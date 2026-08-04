@@ -13,7 +13,9 @@
     "shot": "electron . --mode=window --shot",
     "test": "node tools/test-analysis.mjs && node tools/test-capture.mjs",
     "test:lyrics": "node tools/test-lyrics.mjs",
-    "probe-desktop": "electron tools/probe-desktop.js"
+    "probe-desktop": "electron tools/probe-desktop.js",
+    "probe-lyrics": "node tools/probe-lyrics.js",
+    "probe-gpu": "electron tools/probe-gpu.js"
   },
   "devDependencies": {
     "electron": "^43.2.0"

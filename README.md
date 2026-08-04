@@ -129,6 +129,22 @@ Three things go into getting the timing right:
 
 Nothing to sign into, and `L` or the tray turns it off.
 
+### When they look wrong
+
+`npm run probe-lyrics` prints, for whatever is playing right now, the track as Windows
+reports it, the LRCLIB record that was matched, and the line that would be on screen with
+its neighbours. Three different problems all look like "the lyrics are wrong", and it
+tells them apart:
+
+| What you see | What it is | Fix |
+|---|---|---|
+| Right words, consistently early or late by the same amount | Player latency | **Lyrics → Timing** in the tray |
+| Right words, drifting further out as the song goes on | A different master was matched — a remaster or single edit, timed against a different recording | Nothing to tune; the duration check rejects anything more than 5s off, but a 2s difference still drifts |
+| Different words entirely | Wrong match, usually a cover or a live version with the same title | — |
+
+The one thing it can't be is the line *selection*: that runs off the position Windows
+reports, and is checked against known timestamps in `npm run test:lyrics`.
+
 ---
 
 ## Clicking a wallpaper

@@ -322,8 +322,7 @@ vec3 background(vec3 d) {
 
   // ---- the galactic arm ----------------------------------------------
   float gy   = dot(d, GAL_N);               // 0 on the galactic plane
-  float band = exp(-gy * gy * 30.0);        // tight bright core of the arm
-  float halo = exp(-gy * gy * 3.6);         // broad faint glow either side
+  float band = exp(-gy * gy * 62.0);        // tight bright core of the arm
 
   // Angle *along* the arm, for structure that runs down its length
   vec3  al = normalize(d - GAL_N * gy);
@@ -333,7 +332,10 @@ vec3 background(vec3 d) {
   // making it *lumpier* gives it structure while the average stays near black.
   float cloud = fbm3(d * 3.1, 4);
   cloud = pow(clamp(cloud * 1.35, 0.0, 1.0), 1.7);
-  float arm = band * (0.16 + 1.30 * cloud);
+  // No constant floor. The 0.16 that used to be here lit the whole width of
+  // the band even where there was no cloud at all, which is most of what made
+  // the sky a wash instead of black with something in it.
+  float arm = band * 1.35 * cloud;
 
   // Dust lanes. Dark filaments cutting along the arm are the single thing
   // that makes a star cloud read as the Milky Way instead of a bright smudge.
@@ -349,18 +351,26 @@ vec3 background(vec3 d) {
   vec3 armThin  = nebulaHue(1.5) * 0.62;
   vec3 armDense = armThin * 2.2 + vec3(0.30, 0.14, 0.10);
   vec3 armCol   = mix(armThin, armDense, cloud);
-  col += armCol * arm * 0.115;
-  col += mix(uNebula, vec3(0.26, 0.14, 0.44), 0.6) * halo * 0.015;
+  col += armCol * arm * 0.085;
+  // The broad glow either side of the plane is gone on purpose. exp(-gy*gy*3.6)
+  // is above 0.1 across roughly four fifths of the sky, so however faint you
+  // make it, it tints *everything* — it was the single biggest reason the
+  // background never went properly black.
 
   // ---- nebulae --------------------------------------------------------
   // Two clouds with different hues and drifts, thresholded hard so they sit as
   // distinct shapes against black rather than lifting the whole sky. Each gets
   // a small, much brighter core: emission red on one, reflection blue on the
   // other, which is what gives them a sense of being real objects.
+  // Thresholds are high on purpose: only the top of each noise field survives,
+  // so these are occasional objects sitting in black rather than a tint spread
+  // over the whole sky. Amplitudes go *up* to compensate — where a cloud does
+  // appear it should be vivid, which is the opposite trade to lifting the
+  // average everywhere.
   float n1 = fbm3(d * 1.8 + vec3(9.2, 0.0, uTime * 0.010), 5);
-  n1 = pow(max(n1 - 0.44, 0.0) * 2.6, 2.0);
+  n1 = pow(max(n1 - 0.56, 0.0) * 3.6, 2.0);
   float n2 = fbm3(d * 2.6 - vec3(0.0, 4.1, uTime * 0.015), 4);
-  n2 = pow(max(n2 - 0.47, 0.0) * 2.6, 2.2);
+  n2 = pow(max(n2 - 0.58, 0.0) * 3.6, 2.2);
 
   // A third, much larger violet complex filling the space the other two leave
   // empty. Thresholded hard and multiplied by its own finer noise: a broad
@@ -368,19 +378,19 @@ vec3 background(vec3 d) {
   // that makes it look like a nebula instead is the filament structure, not
   // the amount of light.
   float n3 = fbm3(d * 0.9 + vec3(3.7, 2.4, uTime * 0.006), 4);
-  n3 = pow(max(n3 - 0.46, 0.0) * 2.7, 2.3);
+  n3 = pow(max(n3 - 0.655, 0.0) * 5.0, 2.4);
   float fil = fbm3(d * 5.5 - vec3(1.3, 0.0, uTime * 0.008), 4);
-  // Low floor on purpose: it's the near-black gaps between the filaments that
-  // make this read as structure rather than as a purple wash over everything.
-  n3 *= 0.14 + 1.9 * pow(clamp(fil, 0.0, 1.0), 1.6);
+  // No floor at all: between the filaments this goes to zero, which is what
+  // lets the space around the cloud be genuinely black instead of dim purple.
+  n3 *= 2.4 * pow(clamp(fil, 0.0, 1.0), 2.4);
 
-  col += nebulaHue(1.7) * n3 * 0.17;
-  col += mix(nebulaHue(1.4), vec3(1.0), 0.35) * pow(n3, 2.0) * 0.09;
-  col += uNebula * n1 * 0.13;
+  col += nebulaHue(1.7) * n3 * 0.20;
+  col += mix(nebulaHue(1.4), vec3(1.0), 0.35) * pow(n3, 2.0) * 0.11;
+  col += uNebula * n1 * 0.16;
   // Emission red (ionised hydrogen) on one core, reflection blue on the other.
-  col += vec3(1.00, 0.30, 0.26) * pow(n1, 2.3) * 0.075;
-  col += uNebula.bgr * n2 * 0.070;
-  col += vec3(0.36, 0.56, 1.00) * pow(n2, 2.5) * 0.055;
+  col += vec3(1.00, 0.30, 0.26) * pow(n1, 2.3) * 0.095;
+  col += uNebula.bgr * n2 * 0.085;
+  col += vec3(0.36, 0.56, 1.00) * pow(n2, 2.5) * 0.070;
 
   // ---- stars ----------------------------------------------------------
   // Denser inside the arm, which is what sells it as a star cloud. The far

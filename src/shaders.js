@@ -420,7 +420,7 @@ const vec3  SHIP_POS   = vec3(9.4, 1.7, 4.7);
 
 // The one dial for how big it is. Everything else is a ratio of it, so this can
 // be changed on its own.
-const float SHIP_R     = 0.300;   // major radius of the module ring
+const float SHIP_R     = 0.240;   // major radius of the module ring
 // Outer extent, with slack. Not used as an early-out inside sdShip -- see the
 // note there - only to derive the gate below.
 const float SHIP_BOUND = 0.400;
@@ -485,15 +485,33 @@ float sdShip(vec3 world) {
   // than a seam. Trading some fidelity for roughly two pixels of each is what
   // makes it read as a segmented ring instead of a speckled blob.
   vec3  m = vec3(pr.x - SHIP_R, h, pr.y);
-  float d = sdRoundBox(m, SHIP_R * vec3(0.160, 0.150, 0.145), SHIP_R * 0.045);
+  float d = sdRoundBox(m, SHIP_R * vec3(0.140, 0.150, 0.145), SHIP_R * 0.045);
 
-  // A spine inside the modules, so the ring still reads as one object at the
-  // distances where the notches stop resolving. Kept well outboard: everything
-  // here eats into the hole, and the hole is the recognisable part.
-  d = min(d, length(vec2(rr - SHIP_R * 0.80, h)) - SHIP_R * 0.075);
+  // An inner rim behind the modules, so the ring still reads as one object at
+  // the distances where the notches stop resolving. Kept well outboard:
+  // everything here eats into the hole, and the hole is the recognisable part.
+  d = min(d, length(vec2(rr - SHIP_R * 0.85, h)) - SHIP_R * 0.058);
 
-  // No hub, and nothing across the middle. The Endurance is a ring you can see
-  // straight through, and that hole is most of what makes it recognisable at a
+  // Docking spine through the middle: a capsule along the ring axis, long
+  // enough to show past both faces so it reads as a tube run through the wheel
+  // rather than a dot in the hole. A capsule and not a cylinder because a flat
+  // end-cap flashes as a bright disc every time it turns edge-on.
+  d = min(d, length(vec2(rr, max(abs(h) - SHIP_R * 0.46, 0.0))) - SHIP_R * 0.125);
+
+  // Three spokes out to the rim. Sized against the hole, not against the real
+  // ship: the gap here is about eight pixels across, so anything with the
+  // proportions of an actual truss would close it up entirely and turn the
+  // whole thing back into a blob. Thin enough to leave the hole reading, which
+  // means they soften it rather than draw as crisp struts. That is the trade at
+  // this size, and it is the right way round.
+  const float SPK = 2.0943951;             // 2*pi / 3
+  float bi = mod(a + 0.5 * SPK, SPK) - 0.5 * SPK;
+  vec2  pb = vec2(cos(bi), sin(bi)) * rr;
+  d = min(d, sdRoundBox(vec3(pb.x - SHIP_R * 0.45, h, pb.y),
+                        SHIP_R * vec3(0.45, 0.052, 0.060), SHIP_R * 0.022));
+
+  // Still no solid hub plate. The Endurance is a ring you can see through, and
+  // that gap is most of what makes it recognisable at a
   // dozen pixels -- filling it turns the ship into a coin.
 
   return d;

@@ -6,7 +6,7 @@ Windows desktop wallpaper. Windows-only. No build step, no bundler.
 ## Run it
 
 ```powershell
-cd "C:\Users\Bruno\Documents\Google Drive\07. Coding\BlackHoleVisualizer"
+cd <repo root>                                 # wherever you cloned it
 npm run window                                 # windowed + HUD (best for dev)
 npm run wallpaper                              # desktop wallpaper mode
 npx electron . --demo-audio                    # synthetic beat, skips audio capture
@@ -291,12 +291,12 @@ window flags like `transparent` and `focusable` can't be changed after creation.
 
 ## Sync to Google Drive
 
-Repo lives under the Drive folder, so rclone already covers it. Never sync the Drive
-root. If pushing explicitly:
+Only relevant if your clone happens to live inside an rclone-synced folder; skip this
+otherwise. Never sync the Drive root — it's far larger than this repo. Push just this
+folder, and exclude the two directories that dwarf everything else:
 
 ```powershell
-rclone copy "C:\Users\Bruno\Documents\Google Drive\07. Coding\BlackHoleVisualizer" `
-  "gdrive:07. Coding/BlackHoleVisualizer" `
+rclone copy "<repo root>" "gdrive:<remote path>" `
   --exclude "node_modules/**" --exclude ".git/**" --transfers 8
 ```
 

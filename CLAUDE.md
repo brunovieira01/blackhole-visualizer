@@ -133,6 +133,17 @@ window flags like `transparent` and `focusable` can't be changed after creation.
   widest. `phase` is a fraction of a lap, not an angle, so speed is constant too.
 - **`_hit` must track `.body-disc`.** The hit radius (30 px) is the CSS disc radius; it is
   scaled by `s` only, never by `this.scale`, which grows the *ring* and not the bodies.
+- **Most players publish the SMTC timeline once per track and never again.** Chrome sets
+  `Position` at the start of a song and leaves `LastUpdatedTime` frozen there for its
+  whole length, so the only way to know where playback actually is is
+  `Position + (now - LastUpdatedTime)`. That age must be bounded by the *track duration*,
+  never by a fixed few seconds: a 30-second cap here looked like sane defensiveness and
+  in fact discarded the correction for every song past its first half-minute, reporting a
+  frozen `0.01` forever. Symptom was the lyrics starting from the top of the track
+  whenever the app was launched mid-song, because the renderer seeds its clock from that
+  one reading and nothing ever corrects it. Pauses are subtracted from the age
+  (`$script:pausedFor`) or resuming jumps forward by the length of the pause.
+  `tools/probe-lyrics.js` shows the reported position advancing (or not) in real time.
 - **Numbers on the wire to `nowplaying.ps1` are invariant, and it must parse them that
   way.** `[double]::TryParse` defaults to the *current* culture: on this machine (pt-BR)
   `"123.45"` parsed as **12345**, so clicking the progress bar seeked past the end of the

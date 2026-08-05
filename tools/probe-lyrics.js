@@ -42,7 +42,19 @@ let buf = '';
 let track = null;
 let lyrics = null;
 let pending = false;
-const started = Date.now();
+
+// The watcher spends ten seconds or so compiling its COM interop before it
+// says anything, so the sampling window only starts once it does — otherwise
+// most of the run is spent waiting and you get a single reading.
+let stopTimer = null;
+function startCountdown() {
+  if (stopTimer) return;
+  stopTimer = setTimeout(() => {
+    ps.kill();
+    console.log('\ndone.\n');
+    process.exit(0);
+  }, seconds * 1000);
+}
 
 ps.stdout.setEncoding('utf8');
 ps.stdout.on('data', async (chunk) => {
@@ -55,6 +67,7 @@ ps.stdout.on('data', async (chunk) => {
 
     let np;
     try { np = JSON.parse(line); } catch { continue; }
+    startCountdown();
     if (np.kind !== 'media' || !np.title) {
       console.log('nothing with media metadata is playing');
       continue;
@@ -112,10 +125,4 @@ ps.stdout.on('data', async (chunk) => {
   }
 });
 
-setTimeout(() => {
-  ps.kill();
-  console.log('\ndone.\n');
-  process.exit(0);
-}, seconds * 1000).unref?.();
-
-void started;
+console.log(`waiting for the media watcher (it compiles COM interop first)…`);

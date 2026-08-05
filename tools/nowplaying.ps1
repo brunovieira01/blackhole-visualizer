@@ -373,6 +373,11 @@ try {
 
 $last = ''
 $sincePoll = [int]$IntervalMs              # force an immediate first poll
+
+# Timeline interpolation state - see the poll loop.
+$script:tlStamp = 0
+$script:pausedFor = 0.0
+$script:lastTick = $null
 $SLICE = 40
 
 while ($true) {
@@ -425,13 +430,39 @@ while ($true) {
           $pos = 0.0; $dur = 0.0
           try {
             $tl = $session.GetTimelineProperties()
-            $pos = $tl.Position.TotalSeconds
+            $pos = $tl.Position.TotalSeconds - $tl.StartTime.TotalSeconds
             $dur = ($tl.EndTime - $tl.StartTime).TotalSeconds
+
+            # Pauses have to come off the age below, or resuming jumps the
+            # position forward by however long the track sat paused. The tally
+            # resets whenever the player republishes, since the new Position
+            # already accounts for everything before it.
+            $stamp = $tl.LastUpdatedTime.UtcTicks
+            if ($stamp -ne $script:tlStamp) {
+              $script:tlStamp = $stamp
+              $script:pausedFor = 0.0
+            }
+            $tick = [DateTimeOffset]::Now
+            if ($status -ne 'Playing' -and $null -ne $script:lastTick) {
+              $script:pausedFor += ($tick - $script:lastTick).TotalSeconds
+            }
+            $script:lastTick = $tick
+
             if ($status -eq 'Playing') {
-              $age = ([DateTimeOffset]::Now - $tl.LastUpdatedTime).TotalSeconds
-              if ($age -gt 0 -and $age -lt 30) { $pos += $age }
+              $age = ($tick - $tl.LastUpdatedTime).TotalSeconds - $script:pausedFor
+              # Bounded by the track, NOT by a fixed few seconds. Chrome
+              # publishes the timeline once when a track starts and never
+              # again, so by the middle of a song the last update is minutes
+              # old and is still the only truth available. A 30-second cap
+              # discarded exactly that and reported a frozen position near zero
+              # for the rest of the song - which is what made the lyrics start
+              # from the top of the track whenever the app began mid-song.
+              $limit = 900.0
+              if ($dur -gt 0) { $limit = $dur + 5.0 }
+              if ($age -gt 0 -and $age -lt $limit) { $pos += $age }
             }
             if ($dur -gt 0) { $pos = [Math]::Min($pos, $dur) }
+            if ($pos -lt 0) { $pos = 0.0 }
           } catch { }
 
           $media = [ordered]@{

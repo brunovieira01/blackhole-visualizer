@@ -138,6 +138,7 @@ tells them apart:
 
 | What you see | What it is | Fix |
 |---|---|---|
+| Lines start from the top of the song and stay behind | The player's reported position isn't advancing — the probe shows it frozen | Fixed; if it comes back, that's the timeline interpolation |
 | Right words, consistently early or late by the same amount | Player latency | **Lyrics → Timing** in the tray |
 | Right words, drifting further out as the song goes on | A different master was matched — a remaster or single edit, timed against a different recording | Nothing to tune; the duration check rejects anything more than 5s off, but a 2s difference still drifts |
 | Different words entirely | Wrong match, usually a cover or a live version with the same title | — |

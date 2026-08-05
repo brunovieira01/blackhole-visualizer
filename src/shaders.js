@@ -498,17 +498,18 @@ float sdShip(vec3 world) {
   // end-cap flashes as a bright disc every time it turns edge-on.
   d = min(d, length(vec2(rr, max(abs(h) - SHIP_R * 0.46, 0.0))) - SHIP_R * 0.125);
 
-  // Three spokes out to the rim. Sized against the hole, not against the real
-  // ship: the gap here is about eight pixels across, so anything with the
-  // proportions of an actual truss would close it up entirely and turn the
-  // whole thing back into a blob. Thin enough to leave the hole reading, which
-  // means they soften it rather than draw as crisp struts. That is the trade at
-  // this size, and it is the right way round.
-  const float SPK = 2.0943951;             // 2*pi / 3
-  float bi = mod(a + 0.5 * SPK, SPK) - 0.5 * SPK;
-  vec2  pb = vec2(cos(bi), sin(bi)) * rr;
-  d = min(d, sdRoundBox(vec3(pb.x - SHIP_R * 0.45, h, pb.y),
-                        SHIP_R * vec3(0.45, 0.052, 0.060), SHIP_R * 0.022));
+  // One leg out to the rim, not three. The ship in the film has a single arm
+  // between the spine and the wheel, and the asymmetry is a good part of how it
+  // reads -- a three-spoke version looks like a wheel hub instead. Built from
+  // the unrepeated in-plane coordinate, so it stays a single arm and turns with
+  // the ring.
+  //
+  // Sized against the hole rather than against the real ship: the gap here is
+  // about eight pixels, and a strut with the proportions of an actual truss
+  // closes it entirely and turns the whole thing back into a blob. Being the
+  // only one, it can afford to be a little thicker than the three were.
+  d = min(d, sdRoundBox(vec3(e.x - SHIP_R * 0.45, h, e.y),
+                        SHIP_R * vec3(0.45, 0.060, 0.070), SHIP_R * 0.024));
 
   // Still no solid hub plate. The Endurance is a ring you can see through, and
   // that gap is most of what makes it recognisable at a

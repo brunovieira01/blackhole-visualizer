@@ -89,6 +89,7 @@ const DEFAULTS = {
   orbitScale: 1.0,
 
   showLyrics: true,
+  showClock: true,
   // Seconds to shift the lyrics by. Negative shows each line early, which is
   // what karaoke does — you want to read it just before it's sung. Player and
   // pipeline latency varies, so this is a dial rather than a constant.
@@ -105,6 +106,8 @@ let forceDemo = false;
 
 // Set by --mode=/--shot for this run only; never persisted. Use startupMode().
 let modeOverride = null;
+// --look=<orbit>,<tilt>: a parked camera, for inspecting a fixed sky object.
+let lookAt = null;
 const startupMode = () => modeOverride || config.mode;
 
 let config = { ...DEFAULTS };
@@ -876,6 +879,12 @@ function buildTray() {
       click: (i) => setConfig({ showNowPlaying: i.checked }),
     },
     {
+      label: 'Show clock',
+      type: 'checkbox',
+      checked: config.showClock,
+      click: (i) => setConfig({ showClock: i.checked }),
+    },
+    {
       label: 'Lyrics',
       submenu: [
         {
@@ -1204,6 +1213,7 @@ function setupIpc() {
     ...config,
     forceDemo,
     shotMode: !!shotPath,
+    lookAt,
     // Whether the renderer can expect forwarded pointer events. Without
     // koffi there is no cursor sampling, so the on-screen transport would be
     // shown dead in wallpaper mode rather than merely unclickable.
@@ -1292,6 +1302,15 @@ if (!app.requestSingleInstanceLock()) {
       if (MODES.includes(m)) modeOverride = m;
     }
     forceDemo = process.argv.includes('--demo-audio');
+
+    // --look=<orbit>,<tilt> in radians: park the camera instead of letting it
+    // drift. The deep-sky objects are fixed points spread around the whole
+    // sphere, so without this you wait minutes for one to come past.
+    const argLook = process.argv.find((a) => a.startsWith('--look='));
+    if (argLook) {
+      const [o, t] = argLook.slice(7).split(',').map(Number);
+      if (isFinite(o)) lookAt = { orbit: o, tilt: isFinite(t) ? t : 0.155 };
+    }
 
     const argShot = process.argv.find((a) => a === '--shot' || a.startsWith('--shot='));
     if (argShot) {

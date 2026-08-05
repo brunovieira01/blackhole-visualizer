@@ -241,7 +241,28 @@ window flags like `transparent` and `focusable` can't be changed after creation.
   near-black — raising the floor turns it straight back into a flat wash.
 - **`src/shaders.js` is a JS template literal.** A backtick in a GLSL comment ends the
   string and you get `Uncaught SyntaxError` from *JavaScript*, with a black window and no
-  shader error to go on. Don't quote identifiers with backticks in there.
+  shader error to go on. Don't quote identifiers with backticks in there. This has bitten
+  twice, so `tools/test-shaders.mjs` now imports the module in `npm test` — the failure
+  surfaces there with a line number instead of as a black screen.
+- **The disk's structure is sampled in (angle, radius), not in the plane**, and is far
+  finer radially than azimuthally. That anisotropy is what makes it read as an accretion
+  disk rather than a cloud: orbiting gas shears into concentric striations. The angular
+  axis is the unit vector, never `atan()` — `atan` wraps at ±π and any noise sampled on
+  it leaves a seam down one side of the disk.
+- **The white-hot term in `diskSample` is broad on purpose.** In the real thing the inner
+  disk is glaring white and only the outer third carries visible colour; leaving it
+  orange all the way in is what made this read as illustration rather than photograph.
+- **Deep-sky objects are hand-placed, not scattered by noise.** The Helix, the Butterfly,
+  the jet galaxy and the Endurance sit at fixed directions so each is always in the same
+  part of the sky. They cost almost nothing because `skyFrame()` rejects on a dot product
+  before any noise is evaluated. Keep them dim: same as stars, an overdriven one tonemaps
+  to white through ACES and the hue you just wrote is thrown away.
+- **Aiming at one by hand is guesswork** — pointing straight at it puts it behind the
+  hole, and an azimuth offset moves it diagonally once the pitch is steep. Use
+  `node tools/aim.js <x> <y> <z> [screenX] [screenY]` to get the `--look=` angles, then
+  `npx electron . --mode=window --look=<orbit>,<tilt> --shot=out.png`. Expect the object
+  to land slightly further from the centre than asked: the solver is a straight line and
+  the real ray is lensed outward.
 - **Nothing in the sky is a fixed colour.** The galactic arm and the big nebula take their
   hue from `nebulaHue()`, which pulls a vivid version of the theme's `uNebula` (the preset
   values are dim and desaturated because they're used as a wash elsewhere). Hardcoding a

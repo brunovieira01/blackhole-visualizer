@@ -467,6 +467,41 @@ body.can-click .np-vol-track { cursor: pointer; }
 /* Same reasoning as the transport: only shown where a click can reach it. */
 body:not(.can-click):not(.forwarded) .np-volume { display: none; }
 
+/* ---- clock --------------------------------------------------------------
+   Bottom-right, opposite the now-playing panel and clear of the lyrics, which
+   are centred. Sized in vw like the rest of the chrome so it reads the same on
+   a 1280px window and a 4K wallpaper. */
+.clock {
+  position: fixed;
+  right: clamp(30px, 2.5vw, 66px);
+  bottom: clamp(26px, 2.2vw, 58px);
+  text-align: right;
+  pointer-events: none;
+  user-select: none;
+  opacity: 0;
+  transition: opacity 0.5s ease;
+  z-index: 55;
+}
+
+.clock.show { opacity: 1; }
+
+.clock-time {
+  font: 300 clamp(34px, 3.4vw, 78px)/1 "Segoe UI", "Inter", system-ui, sans-serif;
+  letter-spacing: 0.02em;
+  color: rgba(255, 248, 240, 0.94);
+  font-variant-numeric: tabular-nums;
+  text-shadow: 0 2px 22px rgba(0, 0, 0, 0.95), 0 0 6px rgba(0, 0, 0, 0.85);
+}
+
+.clock-date {
+  margin-top: clamp(4px, 0.35vw, 10px);
+  font: clamp(10px, 0.72vw, 16px)/1.4 "Cascadia Mono", "Consolas", ui-monospace, monospace;
+  letter-spacing: 0.20em;
+  text-transform: uppercase;
+  color: rgba(var(--accent), 0.82);
+  text-shadow: 0 2px 14px rgba(0, 0, 0, 0.95);
+}
+
 /* ---- HUD ---------------------------------------------------------------- */
 .hud {
   position: fixed;

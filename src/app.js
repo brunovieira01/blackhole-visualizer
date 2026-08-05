@@ -41,6 +41,12 @@ const np = {
   volFill: document.getElementById('np-vol-fill'),
 };
 
+const clockEls = {
+  root: document.getElementById('clock'),
+  time: document.getElementById('clock-time'),
+  date: document.getElementById('clock-date'),
+};
+
 const lyricEls = {
   root: document.getElementById('lyrics'),
   prev: document.getElementById('lyric-prev'),
@@ -318,6 +324,40 @@ function renderLyrics() {
   measureLyricSpace();
 }
 
+// ---------------------------------------------------------------------------
+//  Clock
+//
+//  Ticks on the minute boundary rather than on an interval, so it never sits
+//  showing a stale minute for up to 59 seconds after a resume, and never
+//  drifts. Nothing here runs per frame.
+// ---------------------------------------------------------------------------
+let clockTimer = null;
+
+function renderClock() {
+  const on = settings.showClock !== false;
+  clockEls.root.classList.toggle('show', on);
+  if (!on) return;
+
+  const now = new Date();
+  // The user's own locale decides 24h vs 12h and the date order.
+  clockEls.time.textContent = now.toLocaleTimeString([], {
+    hour: '2-digit', minute: '2-digit',
+  });
+  clockEls.date.textContent = now.toLocaleDateString([], {
+    weekday: 'long', day: 'numeric', month: 'long',
+  });
+}
+
+function scheduleClock() {
+  clearTimeout(clockTimer);
+  renderClock();
+  // +250ms of slack so a timer firing a hair early doesn't render the minute
+  // that is just about to end and then sit on it for a full minute.
+  const now = Date.now();
+  const next = 60000 - (now % 60000) + 250;
+  clockTimer = setTimeout(scheduleClock, next);
+}
+
 // Theme colours are HDR (components above 1.0), so normalise against the
 // brightest channel before handing an rgb triplet to CSS.
 function applyAccent(hot) {
@@ -361,7 +401,9 @@ function applySettings(s) {
     rings: settings.rings ?? 1.0,
     ringStyle: settings.ringStyle ?? 1,
     grain: settings.grain ?? 0.012,
-    autoOrbit: settings.autoOrbit ?? 0,
+    // --look means "hold still and let me look at this", so the drift that
+    // would otherwise carry the target out of frame stays off.
+    autoOrbit: settings.lookAt ? 0 : (settings.autoOrbit ?? 0),
   });
 
   orbit?.setOptions({
@@ -378,6 +420,7 @@ function applySettings(s) {
   applyAccent(theme.hot);
   renderNowPlaying();
   renderLyrics();
+  renderClock();
 
   // Auto quality starts from "high" and adapts from there
   autoQuality.enabled = settings.quality === 'auto';
@@ -630,6 +673,10 @@ function bindInteraction() {
       const on = !(settings.showLyrics ?? true);
       bridge?.set('showLyrics', on);
       toast('lyrics ' + (on ? 'on' : 'off'));
+    } else if (k === 'c') {
+      const on = !(settings.showClock !== false);
+      bridge?.set('showClock', on);
+      toast('clock ' + (on ? 'on' : 'off'));
     } else if (k === 'f') {
       bridge?.toggleFullscreen();
     } else if (e.key === 'ArrowUp') {
@@ -657,6 +704,14 @@ async function main() {
 
   renderer = new BlackHoleRenderer(canvas, { forShot: !!initialSettings.shotMode });
   audio = new AudioEngine();
+
+  // --look parks the camera so a fixed sky object can be inspected without
+  // waiting for the drift to bring it round.
+  if (initialSettings.lookAt) {
+    renderer.orbit = initialSettings.lookAt.orbit;
+    renderer.diskTilt = initialSettings.lookAt.tilt;
+    renderer.autoOrbit = 0;
+  }
 
   mode = (await bridge?.getMode()) || 'window';
   document.body.classList.toggle('passive', mode !== 'window');
@@ -695,6 +750,8 @@ async function main() {
   bridge?.onLyrics((l) => setLyrics(l));
 
   bridge?.onCovered((v) => { covered = !!v; });
+
+  scheduleClock();
 
   if (mode === 'window') {
     bindInteraction();

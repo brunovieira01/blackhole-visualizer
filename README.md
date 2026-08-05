@@ -69,6 +69,10 @@ blank.
 Five small bars beside the title ride the live spectrum, and there's a progress bar with
 elapsed / total time. Turn the whole thing off with `N` or from the tray.
 
+Opposite it, in the bottom-right corner, is a clock — time and date in your own locale.
+It ticks on the minute boundary rather than on an interval, so it never sits on a stale
+minute after a resume and never drifts. `C` or the tray turns it off.
+
 ### Controls
 
 Play/pause, previous and next are wired straight through to the same media session, so
@@ -365,6 +369,22 @@ two reasons: the bloom pass picks it up, so it reads as emitted light sharing th
 glow instead of flat UI sitting on top; and the scene can occlude it, so the disk passes
 in front and the ring genuinely sits around the black hole in space.
 
+### Deep-sky objects, and one that isn't
+
+Four things are placed by hand at fixed directions rather than scattered by noise, so
+each is always in the same part of the sky and drifting past one is something you can go
+back to:
+
+| | |
+|---|---|
+| **A planetary nebula** | A thin ring of expelled gas, ionised blue inside and red at the rim, with the exposed white dwarf at the centre |
+| **A bipolar nebula** | Twin cones blown out from a pinched, very hot waist |
+| **An active galaxy** | Bright core with a dust lane straight across it, and two opposed relativistic jets ending in lobes |
+| **Something else** | Twelve modules in a ring. If you know it, you know it — it's small, and finding it is the point |
+
+They cost almost nothing: a dot-product test rejects a ray before any noise is evaluated,
+so only the pixels actually near an object pay for it.
+
 ### The sky
 
 A galactic arm crosses the frame at an angle to the disk, with dark dust lanes cut
@@ -418,6 +438,7 @@ your GPU on a still image all day.
 | `N` | Toggle the now-playing panel |
 | `O` | Toggle the orbit launcher |
 | `L` | Toggle lyrics |
+| `C` | Toggle the clock |
 | `space` | Play / pause |
 | `,` `.` | Previous / next track |
 | `↑` `↓` | Reactivity |
@@ -448,6 +469,8 @@ tools/nowplaying.ps1    Media session (SMTC) + WASAPI + endpoint volume watcher
 tools/fake-track.js     A silent but completely real media session, for testing
 tools/probe-desktop.js  Read-only diagnostics for the shell's desktop layer
 tools/shot-wallpaper.js PrintWindow capture of the live wallpaper, covered or not
+tools/aim.js            --look angles that put a sky direction on screen
+tools/test-shaders.mjs  Structural checks on the GLSL (npm test)
 tools/make-icon.js      Draws assets/icon.png + icon.ico from scratch
 tools/test-analysis.mjs Asserts the spectrum stays balanced (npm test)
 tools/test-capture.mjs  Pins the capture chain's microphone contract (npm test)
@@ -467,6 +490,7 @@ npm run test:lyrics          # LRC parsing, and one live LRCLIB lookup
 npm run probe-desktop        # what the shell's desktop layer looks like right now
 npx electron . --demo-audio  # synthetic beat, no capture — handy for tuning
 npx electron . --mode=window --shot=out.png   # render a frame to a PNG and exit
+npx electron . --mode=window --look=2.87,-0.6 --shot=out.png   # park the camera and look
 npx electron tools/fake-track.js              # a silent, real media session to test against
 ```
 

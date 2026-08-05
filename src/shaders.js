@@ -302,6 +302,121 @@ vec3 nebulaHue(float sat) {
   return max(mix(vec3(l), n, sat), 0.0);
 }
 
+// ---- hand-placed deep-sky objects ----------------------------------------
+//  A few set pieces at fixed directions, rather than more noise. The point is
+//  that the Helix is always in one part of the sky and the Butterfly in
+//  another, so drifting past one is a thing you notice and can go back to.
+//
+//  Each is drawn in a flat local frame around its own direction. The dot
+//  product test at the top means a ray only pays for an object it is actually
+//  near, which is why four of these cost almost nothing.
+
+// Local tangent coordinates around the object's axis, in units of its angular
+// radius. Returns false when the ray is nowhere near it. (No backticks in this
+// file: the whole shader is a JS template literal.)
+bool skyFrame(vec3 d, vec3 axis, float ang, out vec2 p) {
+  p = vec2(0.0);
+  // 2.6 radii of slack so soft outer haloes are not clipped at a hard circle.
+  if (dot(d, axis) < cos(min(ang * 2.6, 1.5))) return false;
+  vec3 up = abs(axis.y) > 0.9 ? vec3(1.0, 0.0, 0.0) : vec3(0.0, 1.0, 0.0);
+  vec3 t1 = normalize(cross(axis, up));
+  vec3 t2 = cross(axis, t1);
+  p = vec2(dot(d, t1), dot(d, t2)) / ang;
+  return true;
+}
+
+// A planetary nebula seen face on: a bright ring of expelled gas, ionised blue
+// on the inside and red at the rim, with the exposed white dwarf at the centre.
+vec3 nebulaHelix(vec3 d, vec3 axis, float ang) {
+  vec2 p;
+  if (!skyFrame(d, axis, ang, p)) return vec3(0.0);
+  float rr = length(p);
+  float n = fbm3(vec3(p * 2.4, 11.3), 4);
+
+  // Tight ring and a dim interior: the shell is thin, and a broad inner glow
+  // turns the whole thing into a blob. Amplitudes stay low so the hue survives
+  // the tonemap -- an overdriven nebula comes out white, same as a star does.
+  float ring = exp(-pow((rr - 0.62) * 4.8, 2.0)) * (0.28 + 1.10 * n);
+  vec3 col = mix(vec3(0.22, 0.80, 0.94), vec3(1.00, 0.28, 0.14),
+                 smoothstep(0.52, 0.82, rr)) * ring * 0.72;
+  col += vec3(0.20, 0.52, 0.82) * exp(-rr * rr * 5.5) * 0.09 * (0.4 + n);
+  col += vec3(1.0, 0.97, 0.92) * exp(-rr * rr * 1400.0) * 1.1;  // the white dwarf
+  return col * smoothstep(1.9, 0.7, rr);
+}
+
+// A bipolar nebula: twin lobes blown out along one axis from a pinched, very
+// hot waist. The pinch is the whole silhouette, so it is a smoothstep on the
+// distance from the waist rather than anything subtle.
+vec3 nebulaButterfly(vec3 d, vec3 axis, float ang) {
+  vec2 p;
+  if (!skyFrame(d, axis, ang, p)) return vec3(0.0);
+  float n = fbm3(vec3(p * 2.8, 4.7), 4);
+
+  // Cones opening away from the waist, not two round blobs: the width has to
+  // grow with distance from the centre or it reads as a figure of eight.
+  vec2 q = vec2(p.x, abs(p.y));
+  float width = 0.10 + 0.62 * q.y;
+  float lobe = exp(-pow(abs(q.x) / max(width, 0.02), 2.2));
+  lobe *= exp(-pow((q.y - 0.55) * 1.9, 2.0));
+  lobe *= smoothstep(0.02, 0.22, q.y);
+  lobe *= 0.25 + 1.15 * n;
+
+  vec3 col = mix(vec3(0.80, 0.30, 1.00), vec3(0.30, 0.54, 1.00), n) * lobe * 0.60;
+  col += vec3(1.00, 0.80, 0.62) * exp(-dot(p, p) * 90.0) * 0.42;  // hot waist
+  return col * smoothstep(1.9, 0.7, length(p));
+}
+
+// An active galaxy: bright core, a dust lane straight across it, and two
+// opposed relativistic jets ending in lobes where they slam into the
+// intergalactic medium.
+vec3 galaxyJet(vec3 d, vec3 axis, float ang) {
+  vec2 p;
+  if (!skyFrame(d, axis, ang, p)) return vec3(0.0);
+  float rr = length(p);
+  float n = fbm3(vec3(p * 2.0, 21.9), 5);
+
+  vec3 col = vec3(1.00, 0.92, 0.78) * exp(-dot(p, p) * 3.0) * (0.30 + 0.45 * n);
+
+  vec2 j = normalize(vec2(0.52, 1.0));
+  float along  = dot(p, j);
+  float across = dot(p, vec2(-j.y, j.x));
+  float jet = exp(-across * across * 90.0) * exp(-abs(along) * 1.1)
+            * smoothstep(0.02, 0.30, abs(along));
+  col += vec3(0.78, 0.62, 1.00) * jet * (0.5 + 0.9 * n) * 1.5;
+
+  float lobes = exp(-pow((abs(along) - 0.88) * 2.6, 2.0)) * exp(-across * across * 4.0);
+  col += vec3(1.00, 0.36, 0.32) * lobes * (0.30 + n) * 0.70;
+
+  // Dust lane: perpendicular to the jets, and only across the core.
+  float lane = exp(-pow(across * 6.0, 2.0)) * smoothstep(1.0, 0.15, rr);
+  col *= 1.0 - 0.72 * lane;
+
+  return col * smoothstep(2.0, 0.8, rr);
+}
+
+// The easter egg. Twelve modules in a ring around a hub -- if you know it, you
+// know it. Tiny on purpose: it should be something you happen to notice, not
+// scenery.
+vec3 shipEndurance(vec3 d, vec3 axis, float ang) {
+  vec2 p;
+  if (!skyFrame(d, axis, ang, p)) return vec3(0.0);
+  float rr = length(p);
+  float a  = atan(p.y, p.x);
+
+  float ring = exp(-pow((rr - 0.78) * 11.0, 2.0));
+  float mods = pow(0.5 + 0.5 * cos(a * 12.0), 5.0);
+  float body = ring * (0.30 + 0.70 * mods);
+  body += exp(-rr * rr * 190.0) * 0.85;                          // hub
+  body += exp(-pow(sin(a * 4.0) * rr * 7.0, 2.0))
+        * smoothstep(0.78, 0.06, rr) * 0.22;                     // spokes
+
+  // Cold metal, with one specular glint so it reads as a made thing.
+  vec3 col = vec3(0.78, 0.84, 0.95) * body;
+  col += vec3(1.0) * exp(-pow((rr - 0.78) * 11.0, 2.0))
+       * pow(max(cos(a - 0.7), 0.0), 40.0) * 0.9;
+  return col * 0.85;
+}
+
 // Normal of the galactic plane. Deliberately tilted well away from the
 // accretion disk's plane so the arm crosses the frame at an angle and the two
 // structures read as separate things rather than one smear.
@@ -396,6 +511,16 @@ vec3 background(vec3 d) {
   // Denser inside the arm, which is what sells it as a star cloud. The far
   // layer is shifted along the spectral ramp so the two don't draw from the
   // same colours in the same order and read as one field.
+  // ---- deep-sky objects -----------------------------------------------
+  // Sparse and spread right around the sphere, so at most one is in frame at
+  // a time and the camera's slow drift brings each past every few minutes.
+  // Sampled with the *unrotated* direction: these are meant to be fixed
+  // landmarks, not part of the parallaxing star layers.
+  col += nebulaHelix(d, normalize(vec3(-0.74, 0.30, 0.60)), 0.105);
+  col += nebulaButterfly(d, normalize(vec3(0.60, -0.44, -0.67)), 0.075);
+  col += galaxyJet(d, normalize(vec3(0.16, 0.60, 0.78)), 0.130);
+  col += shipEndurance(d, normalize(vec3(0.88, 0.14, -0.45)), 0.017);
+
   col += starLayer(dNear,  90.0, 0.950 - band * 0.030, 1.00, 0.00, 34.0);
   col += starLayer(dFar,  210.0, 0.970 - band * 0.018, 0.55, 0.37, 34.0);
 
@@ -423,10 +548,23 @@ vec3 diskSample(vec3 hit, vec3 vel, out float alpha) {
   float w = uSpin * 5.5 * pow(max(r, 0.6), -1.5);
   vec2  q = rot(w) * hit.xz;
 
-  // Two noise scales -> filaments + large-scale clumping
-  float n1 = fbm2(q * 0.85 + vec2(0.0, uTime * 0.05), 5);
-  float n2 = fbm2(q * 3.10 - vec2(uTime * 0.11, 0.0), 4);
+  // Structure is sampled in (angle, radius) rather than in the plane, and is
+  // far finer radially than azimuthally. That anisotropy is the whole
+  // difference between a real accretion disk and a cloud: orbiting gas gets
+  // sheared into concentric striations, so detail survives across radius and
+  // is smeared out along the flow.
+  //
+  // The angular axis is the unit vector rather than atan(), because atan wraps
+  // at +-pi and any noise sampled on it shows a seam down one side of the disk.
+  vec2 dir = q / max(r, 1e-4);
+  float n1 = fbm3(vec3(dir * 1.65, r * 2.30 + uTime * 0.05), 5);
+  float n2 = fbm3(vec3(dir * 2.60, r * 9.50 - uTime * 0.11), 4);
   float turb = mix(n1, n1 * n2 * 2.0, 0.45 + 0.45 * uMid * uReact);
+
+  // A separate, much finer set of rings laid over the top. Cheap, and it is
+  // what reads as "banded" at a glance rather than merely detailed.
+  float rings = fbm3(vec3(dir * 0.9, r * 26.0 + uTime * 0.03), 3);
+  turb *= 0.80 + 0.40 * rings;
 
   // The spectrum is mapped radially: bass ripples the inner rim,
   // highs shimmer at the outer edge. This is what makes it "dance".
@@ -440,10 +578,14 @@ vec3 diskSample(vec3 hit, vec3 vel, out float alpha) {
   // full-disk flash on every beat is its own kind of strobing.
   dens *= 1.0 + uBeat * uReact * 0.30 * exp(-t * 2.0);
 
-  // Temperature: T ~ r^-3/4 -> white hot inside, ember red outside
+  // Temperature: T ~ r^-3/4 -> white hot inside, ember red outside.
+  // The white-hot term is broad and strong on purpose: in the real thing (and
+  // in every render of one) the inner disk is glaring white and only the outer
+  // third carries visible colour. Leaving it orange all the way in is what
+  // made this read as illustration rather than photograph.
   float temp = pow(clamp(1.0 - t, 0.0, 1.0), 1.35);
   vec3 col = mix(uCool, uHot, temp);
-  col += vec3(1.0, 0.97, 0.92) * pow(temp, 5.0) * 0.55;
+  col += vec3(1.0, 0.98, 0.94) * pow(temp, 2.6) * 1.15;
 
   // Relativistic beaming + Doppler tint: orbital beta ~ sqrt(r_s / 2r)
   vec3 orbit = normalize(cross(vec3(0.0, 1.0, 0.0), vec3(hit.x, 0.0, hit.z)));

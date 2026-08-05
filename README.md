@@ -208,6 +208,30 @@ remembers on disk that it hid them and puts them back on next launch.
 
 It's **off by default**: a fresh clone should never empty someone's desktop unannounced.
 
+### It only runs in wallpaper mode
+
+Switching the toggle on while you're in **window** mode does nothing visible, and that is
+not a bug. The launcher needs the desktop layer it draws onto, and in window mode there
+is no desktop to replace and no icons to stand in for.
+
+The deeper reason is how it reads the mouse. A window in the wallpaper layer can never
+receive mouse input — Explorer's `SHELLDLL_DefView` sits above it and eats every click on
+the desktop, and no window style changes that. So the launcher doesn't use DOM events at
+all: it samples the global cursor (`GetCursorPos` / `GetAsyncKeyState` / `WindowFromPoint`)
+on a 16 ms timer and hit-tests the bodies itself. Nothing is hooked and nothing is
+injected. That machinery has nothing to attach to outside the wallpaper layer, so the
+checks are explicit — `orbitActive()` requires the mode not be `window`, and pointer
+forwarding starts only in `wallpaper`.
+
+Two consequences that also look like bugs and aren't: the orbit **pauses** whenever your
+cursor is on the desktop, because you can't click a moving target; and synthetic
+**right-click is ignored**, because Explorer still shows its own context menu and two
+menus at once is worse than none.
+
+So it's wallpaper mode *or* window mode, not both. Worth knowing if you've settled on
+window mode for performance — on a laptop with integrated graphics, ray-marching this
+scene across several monitors is often the reason to.
+
 ---
 
 ## Motion

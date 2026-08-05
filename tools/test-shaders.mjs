@@ -34,7 +34,7 @@ for (const [name, src] of Object.entries(stages)) {
 
 console.log('\nscene shader entry points\n');
 for (const fn of ['background', 'diskSample', 'starColor', 'starLayer',
-  'nebulaHelix', 'nebulaButterfly', 'galaxyJet', 'shipEndurance']) {
+  'nebulaHelix', 'nebulaButterfly', 'galaxyJet', 'sdShip', 'shadeShip']) {
   check(`defines ${fn}()`, new RegExp(`\\b${fn}\\s*\\(`).test(SCENE_FRAG));
 }
 

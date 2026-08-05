@@ -1,4 +1,4 @@
-// ---------------------------------------------------------------------------
+﻿// ---------------------------------------------------------------------------
 //  GLSL sources for the black hole visualiser.
 //
 //  Everything is drawn with a single fullscreen triangle (no vertex buffers).
@@ -394,27 +394,142 @@ vec3 galaxyJet(vec3 d, vec3 axis, float ang) {
   return col * smoothstep(2.0, 0.8, rr);
 }
 
-// The easter egg. Twelve modules in a ring around a hub -- if you know it, you
-// know it. Tiny on purpose: it should be something you happen to notice, not
-// scenery.
-vec3 shipEndurance(vec3 d, vec3 axis, float ang) {
-  vec2 p;
-  if (!skyFrame(d, axis, ang, p)) return vec3(0.0);
-  float rr = length(p);
-  float a  = atan(p.y, p.x);
+// ---------------------------------------------------------------------------
+//  The Endurance. Twelve modules in a ring around a hub -- if you know it, you
+//  know it.
+//
+//  This used to be painted flat onto the celestial sphere alongside the
+//  nebulae, which put it at infinity: it slid across the sky as the camera
+//  drifted instead of holding a place in space, took no lensing, and could
+//  never pass behind anything. It is now a real body with a real position,
+//  marched as a signed distance field inside the geodesic loop -- so the
+//  photons that reach it are already curved, and when the camera brings it
+//  round behind the hole it distorts and doubles like everything else does.
+//
+//  Tiny on purpose: it should be something you happen to notice, not scenery.
+// ---------------------------------------------------------------------------
 
-  float ring = exp(-pow((rr - 0.78) * 11.0, 2.0));
-  float mods = pow(0.5 + 0.5 * cos(a * 12.0), 5.0);
-  float body = ring * (0.30 + 0.70 * mods);
-  body += exp(-rr * rr * 190.0) * 0.85;                          // hub
-  body += exp(-pow(sin(a * 4.0) * rr * 7.0, 2.0))
-        * smoothstep(0.78, 0.06, rr) * 0.22;                     // spokes
+// Parked above the disk plane and inside the outer edge, so the disk lights it
+// from below and it has structure to be silhouetted against.
+// Skimming just over the disk, out where it has cooled to orange. Height is the
+// whole game here: the inner disk tonemaps to white and would swallow anything
+// this small, while out at this radius the hull is the brightest thing in its
+// own patch of frame and the disk lights it hard from underneath -- which is
+// exactly how the film shot it.
+const vec3  SHIP_POS   = vec3(9.4, 1.7, 4.7);
 
-  // Cold metal, with one specular glint so it reads as a made thing.
-  vec3 col = vec3(0.78, 0.84, 0.95) * body;
-  col += vec3(1.0) * exp(-pow((rr - 0.78) * 11.0, 2.0))
-       * pow(max(cos(a - 0.7), 0.0), 40.0) * 0.9;
-  return col * 0.85;
+// The one dial for how big it is. Everything else is a ratio of it, so this can
+// be changed on its own.
+const float SHIP_R     = 0.300;   // major radius of the module ring
+// Outer extent, with slack. Not used as an early-out inside sdShip -- see the
+// note there - only to derive the gate below.
+const float SHIP_BOUND = 0.400;
+
+// Squared radius of the region where the marcher bothers to ask about the ship
+// at all. It has to clear SHIP_BOUND by more than one full coarse step (0.9) or
+// a ray could jump from "not near" to "already inside the hull" in one go.
+const float SHIP_NEAR2 = 1.8225;  // 1.35^2
+
+// Ring axis: 45 degrees between straight up and the outward radial at SHIP_POS.
+// This matters more than it looks. The camera sits nearly in the disk plane, so
+// an axis pointing up would show the ring edge-on -- a bright dash, with the
+// hole through the middle invisible and nothing left to recognise. Tilted like
+// this it reads as an open ellipse from both the near and the far side of the
+// orbit, and goes properly edge-on only for a short stretch of each lap.
+const vec3 SHIP_AX = vec3(0.632, 0.707, 0.316);
+
+float sdRoundBox(vec3 p, vec3 b, float r) {
+  vec3 q = abs(p) - b + r;
+  return length(max(q, 0.0)) + min(max(q.x, max(q.y, q.z)), 0.0) - r;
+}
+
+// Note there is deliberately no bounding-sphere early-out in here. Returning
+// the distance to a bounding sphere looks like a free optimisation and is a
+// trap: it is a valid lower bound, so the sphere tracer happily converges on
+// it, and then the caller's "am I touching the hull" test fires on the *sphere*
+// instead. The result is a solid blob the size of the bound, with the ring, the
+// gaps and the hole through the middle all invisible inside it. Cost is kept
+// down by the caller's neighbourhood gate instead, which never feeds a distance
+// into the hit test.
+float sdShip(vec3 world) {
+  vec3 q = world - SHIP_POS;
+
+  vec3 t1 = normalize(cross(SHIP_AX, vec3(0.0, 0.0, 1.0)));
+  vec3 t2 = cross(SHIP_AX, t1);
+
+  // It spins for its own gravity, which is canon and also the clearest possible
+  // signal that this is a solid object and not a decal. Ambient by definition:
+  // constant rate, never touched by the audio.
+  float sa = uAmbient * uTime * 0.085;
+  float cs = cos(sa), sn = sin(sa);
+  vec2  e  = vec2(dot(q, t1), dot(q, t2));
+  e = vec2(e.x * cs - e.y * sn, e.x * sn + e.y * cs);
+  float h  = dot(q, SHIP_AX);          // along the ring axis
+
+  float rr = length(e);
+  float a  = atan(e.y, e.x);
+
+  // Twelve discrete modules, not a lumpy doughnut. Fold the disc into one
+  // 30-degree sector and put a single rounded box in it: what carries the
+  // silhouette is the *gaps*, and a swelling tube has none. The modules take
+  // roughly three quarters of the circumference, leaving notches wide enough to
+  // survive being a fraction of a pixel.
+  const float SEG = 0.5235988;             // 2*pi / 12
+  float ai = mod(a + 0.5 * SEG, SEG) - 0.5 * SEG;
+  vec2  pr = vec2(cos(ai), sin(ai)) * rr;  // rotated back into the first sector
+
+  // Local axes of a module: radial, along the ring axis, tangential.
+  // Module and gap are deliberately near enough the same size. The film's
+  // modules are chunky with fine seams, but a seam here is a fraction of a
+  // pixel and one sample per pixel turns it into a crawling sparkle rather
+  // than a seam. Trading some fidelity for roughly two pixels of each is what
+  // makes it read as a segmented ring instead of a speckled blob.
+  vec3  m = vec3(pr.x - SHIP_R, h, pr.y);
+  float d = sdRoundBox(m, SHIP_R * vec3(0.160, 0.150, 0.145), SHIP_R * 0.045);
+
+  // A spine inside the modules, so the ring still reads as one object at the
+  // distances where the notches stop resolving. Kept well outboard: everything
+  // here eats into the hole, and the hole is the recognisable part.
+  d = min(d, length(vec2(rr - SHIP_R * 0.80, h)) - SHIP_R * 0.075);
+
+  // No hub, and nothing across the middle. The Endurance is a ring you can see
+  // straight through, and that hole is most of what makes it recognisable at a
+  // dozen pixels -- filling it turns the ship into a coin.
+
+  return d;
+}
+
+vec3 shipNormal(vec3 p) {
+  // Tetrahedral gradient: four taps rather than six.
+  vec2 k = vec2(1.0, -1.0) * 0.0016;
+  return normalize(k.xyy * sdShip(p + k.xyy) + k.yyx * sdShip(p + k.yyx) +
+                   k.yxy * sdShip(p + k.yxy) + k.xxx * sdShip(p + k.xxx));
+}
+
+vec3 shadeShip(vec3 p, vec3 rd) {
+  vec3 n = shipNormal(p);
+
+  // The disk is the only light for light-years, so it comes from the hole and
+  // it is the disk's own colour. No fill light, no ambient term worth the name:
+  // out here the shadowed side of a hull really is black.
+  vec3  L    = normalize(-p);
+  float diff = max(dot(n, L), 0.0);
+  float rim  = pow(1.0 - max(dot(n, -rd), 0.0), 3.0);
+
+  // Off-white panelling, not steel. The film's hull is pale and slightly warm,
+  // and a blue-grey one disappears into the sky it is usually seen against.
+  //
+  // The overall level is set against the bright pass, not by eye. Threshold is
+  // 1.05 and gargantua's uHot is 1.45, so the obvious albedo for white panels
+  // puts the whole hull over the line -- and a twenty-pixel object that blooms
+  // is a twenty-pixel blob, with the hole through the middle glowed shut. Lit
+  // side lands near 0.95; only the glint is allowed over, which is what gives
+  // it a hard highlight instead of a halo.
+  vec3 metal = vec3(0.58, 0.58, 0.56);
+  vec3 col   = metal * (0.05 + 0.90 * diff) * mix(uHot, vec3(1.0), 0.30);
+  col += uHot * rim * 0.18;                                  // disk light wrap
+  col += vec3(1.0) * pow(max(dot(n, normalize(L - rd)), 0.0), 48.0) * 0.30;
+  return col;
 }
 
 // Normal of the galactic plane. Deliberately tilted well away from the
@@ -460,7 +575,7 @@ vec3 background(vec3 d) {
 
   // The arm used to be a neutral grey, which is exactly what made the sky read
   // as a white smear: the brightest parts of it had no hue at all. Colour it by
-  // density instead — thin outskirts hold the theme's hue, and the dense cores
+  // density instead â€” thin outskirts hold the theme's hue, and the dense cores
   // brighten and warm, the way an ionised star cloud actually looks. Same
   // luminance as before, so the "contrast not brightness" rule still holds.
   vec3 armThin  = nebulaHue(1.5) * 0.62;
@@ -469,7 +584,7 @@ vec3 background(vec3 d) {
   col += armCol * arm * 0.085;
   // The broad glow either side of the plane is gone on purpose. exp(-gy*gy*3.6)
   // is above 0.1 across roughly four fifths of the sky, so however faint you
-  // make it, it tints *everything* — it was the single biggest reason the
+  // make it, it tints *everything* â€” it was the single biggest reason the
   // background never went properly black.
 
   // ---- nebulae --------------------------------------------------------
@@ -479,7 +594,7 @@ vec3 background(vec3 d) {
   // other, which is what gives them a sense of being real objects.
   // Thresholds are high on purpose: only the top of each noise field survives,
   // so these are occasional objects sitting in black rather than a tint spread
-  // over the whole sky. Amplitudes go *up* to compensate — where a cloud does
+  // over the whole sky. Amplitudes go *up* to compensate â€” where a cloud does
   // appear it should be vivid, which is the opposite trade to lifting the
   // average everywhere.
   float n1 = fbm3(d * 1.8 + vec3(9.2, 0.0, uTime * 0.010), 5);
@@ -519,13 +634,14 @@ vec3 background(vec3 d) {
   col += nebulaHelix(d, normalize(vec3(-0.74, 0.30, 0.60)), 0.105);
   col += nebulaButterfly(d, normalize(vec3(0.60, -0.44, -0.67)), 0.075);
   col += galaxyJet(d, normalize(vec3(0.16, 0.60, 0.78)), 0.130);
-  col += shipEndurance(d, normalize(vec3(0.88, 0.14, -0.45)), 0.017);
+  // The Endurance is deliberately absent here: it is a body in the scene now,
+  // marched in the geodesic loop, not a direction on the sky.
 
   col += starLayer(dNear,  90.0, 0.950 - band * 0.030, 1.00, 0.00, 34.0);
   col += starLayer(dFar,  210.0, 0.970 - band * 0.018, 0.55, 0.37, 34.0);
 
   // A handful of foreground giants. Every real sky has a few stars that are
-  // obviously coloured — a red Betelgeuse, a blue Rigel — and they are what
+  // obviously coloured â€” a red Betelgeuse, a blue Rigel â€” and they are what
   // you actually notice. Kept moderate rather than bright: ACES desaturates
   // highlights, so an overdriven star tonemaps to white and the colour is
   // lost. These stay in range and let the bloom carry the hue instead.
@@ -671,6 +787,30 @@ void main() {
     float dt = clamp(r * 0.075, 0.018, 0.9);
     dt *= clamp(abs(prevD) * 0.55 + 0.30, 0.30, 1.0);
 
+    // The ship is two orders of magnitude smaller than the disk, so the disk's
+    // step size would stride straight over it. Sphere-trace the last stretch
+    // instead -- but only for the rays that come anywhere near it.
+    //
+    // That gate is not a micro-optimisation. sdShip carries trig, a pow and an
+    // atan, and calling it unconditionally is up to 310 evaluations per ray
+    // across the whole frame: enough to blow past the driver's watchdog on
+    // integrated graphics, which resets the context and hands back a black
+    // frame. One dot product per step keeps the cost where the ship actually
+    // is, which is well under two percent of the screen.
+    vec3 qs = pos - SHIP_POS;
+    if (dot(qs, qs) < SHIP_NEAR2) {
+      float shipD = sdShip(pos);
+      if (shipD < 0.006) {
+        col  += trans * shadeShip(pos, normalize(vel));
+        trans = 0.0;
+        break;
+      }
+      // The floor matters as much as the bound: without it a ray that grazes
+      // the hull creeps up on it and spends the entire step budget there,
+      // truncating the disk and the sky behind it.
+      dt = min(dt, max(shipD * 0.75, 0.007));
+    }
+
     vec3 prev = pos;
     vec3 acc  = -1.5 * h2 * pos / pow(dot(pos, pos), 2.5);
     vel += acc * dt;
@@ -698,7 +838,7 @@ void main() {
 
   // Photon ring: light that skimmed r = 1.5 r_s piles up into a thin halo.
   // Rays that fell straight in have minR ~ 1, so the shadow stays truly black.
-  // Held at a constant brightness — a black hole that throbs on every beat is
+  // Held at a constant brightness â€” a black hole that throbs on every beat is
   // exactly the kind of motion we're keeping out of the frame.
   float ringD = abs(minR - 1.5 * R_S);
   float ring  = exp(-ringD * ringD * 90.0);
@@ -707,7 +847,7 @@ void main() {
   // ---- audio ring -----------------------------------------------------
   // One shape, not two. The spectrum and the waveform used to be a bar crown
   // and a separate oscilloscope loop fighting for the same space; here they
-  // are a single closed contour whose radius carries both — the spectrum
+  // are a single closed contour whose radius carries both â€” the spectrum
   // gives the large lobes, the waveform adds the fine wobble on top. The four
   // styles are just different ways of drawing that one curve.
   //
@@ -830,7 +970,7 @@ void main() {
 
 // ---------------------------------------------------------------------------
 //  Composite: bloom + ACES tonemap + vignette + grain
-//  (No overlay rings — all the audio reactivity lives in the disk itself.)
+//  (No overlay rings â€” all the audio reactivity lives in the disk itself.)
 // ---------------------------------------------------------------------------
 export const COMPOSITE_FRAG = `#version 300 es
 precision highp float;
@@ -865,7 +1005,7 @@ void main() {
 
   // Chromatic aberration grows towards the edges. Constant, not beat-driven:
   // shifting the whole frame's colour fringing in time with the music is a
-  // large part of what made this uncomfortable to look at. Kept low anyway —
+  // large part of what made this uncomfortable to look at. Kept low anyway â€”
   // point stars split into coloured dots if it's too strong.
   float ca = 0.0006 * dot(p, p) * 0.35;
   vec2  dir = normalize(uv - 0.5 + 1e-6);
@@ -874,7 +1014,7 @@ void main() {
   scene.g = texture(uScene, uv).g;
   scene.b = texture(uScene, uv - dir * ca).b;
 
-  // Bloom gain is constant too — pumping it made the entire screen breathe.
+  // Bloom gain is constant too â€” pumping it made the entire screen breathe.
   vec3 bloom = texture(uBloom, uv).rgb;
   vec3 col = scene + bloom * uBloomAmt;
 
@@ -898,3 +1038,5 @@ void main() {
 
   fragColor = vec4(col, a);
 }`;
+
+

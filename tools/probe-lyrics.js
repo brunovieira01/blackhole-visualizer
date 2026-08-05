@@ -46,13 +46,25 @@ let pending = false;
 // The watcher spends ten seconds or so compiling its COM interop before it
 // says anything, so the sampling window only starts once it does — otherwise
 // most of the run is spent waiting and you get a single reading.
+// The position the player reports must climb monotonically within a track.
+// It once snapped back to near zero partway through every song, which read as
+// the lyrics matching for a while and then going haywire, so it is worth
+// asserting rather than eyeballing.
+let prevPos = -1;
+let jumps = 0;
+let samples = 0;
+
 let stopTimer = null;
 function startCountdown() {
   if (stopTimer) return;
   stopTimer = setTimeout(() => {
     ps.kill();
+    console.log(`\n${samples} readings, ${jumps} backward jump(s) within a track`);
+    console.log(jumps === 0
+      ? 'position advanced monotonically — the clock is sound'
+      : 'the reported position went BACKWARDS: that is the fault, not the lyrics');
     console.log('\ndone.\n');
-    process.exit(0);
+    process.exit(jumps === 0 ? 0 : 1);
   }, seconds * 1000);
 }
 
@@ -73,10 +85,12 @@ ps.stdout.on('data', async (chunk) => {
       continue;
     }
 
+    samples++;
     const id = `${np.artist}|${np.title}|${Math.round(np.duration)}`;
     if (id !== track) {
       track = id;
       lyrics = null;
+      prevPos = -1;
       console.log('\n' + '-'.repeat(72));
       console.log(`track     ${np.artist} - ${np.title}`);
       console.log(`album     ${np.album || '(none)'}`);
@@ -108,6 +122,13 @@ ps.stdout.on('data', async (chunk) => {
         console.log('-'.repeat(72));
       }
     }
+
+    if (prevPos >= 0 && np.position < prevPos - 0.5) {
+      jumps++;
+      console.log(`\n  !! position jumped BACKWARDS ${prevPos.toFixed(2)}s -> ` +
+        `${np.position.toFixed(2)}s without a track change`);
+    }
+    prevPos = np.position;
 
     if (!lyrics) continue;
 

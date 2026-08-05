@@ -54,6 +54,7 @@ foreground, so the keystrokes land in whatever app is actually in front.
 |---|---|
 | `main.js` | Modes, tray menu, config persistence, loopback plumbing, autostart |
 | `preload.js` | contextBridge IPC surface (`window.bhv`) |
+| `src/welcome.html` | First-run guide to the controls; self-contained, own styles |
 | `native/wallpaper.js` | `SetParent` into Explorer's WorkerW via koffi |
 | `native/desktop.js` | Desktop icon show/hide + global pointer sampling (koffi) |
 | `lib/desktop-items.js` | Reads the Desktop, resolves shortcut target icons |
@@ -112,6 +113,16 @@ window flags like `transparent` and `focusable` can't be changed after creation.
   `uncaughtException`. If you add another exit path, add it there too.
 - **`orbitLauncher` defaults to `false`.** A fresh clone must never empty someone's
   desktop unannounced.
+- **The first-run guide is a real window, not an overlay.** The default mode is wallpaper
+  and a wallpaper window can never be clicked, so the one screen that must be dismissible
+  is the one that cannot depend on pointer forwarding. It is also the only thing here
+  allowed to take focus, and only once.
+- **"First run" means there was no config file**, not `seenWelcome`. The flag alone would
+  fire the guide at every existing user the first time they updated, since their config
+  predates the key. `maybeShowWelcome()` also writes the flag when it *shows* the guide
+  rather than when it is dismissed: nothing writes config until a tray interaction, so a
+  first run that ends with the window merely closed would otherwise still look like a
+  first run next time.
 - **`app.getFileIcon()` on a `.lnk`** usually returns the generic shortcut glyph, not the
   target's icon. `lib/desktop-items.js` resolves the link with `shell.readShortcutLink`
   and asks for the *target's* icon, falling back to the `.lnk`. Every icon lookup has a
@@ -252,17 +263,38 @@ window flags like `transparent` and `focusable` can't be changed after creation.
 - **The white-hot term in `diskSample` is broad on purpose.** In the real thing the inner
   disk is glaring white and only the outer third carries visible colour; leaving it
   orange all the way in is what made this read as illustration rather than photograph.
-- **Deep-sky objects are hand-placed, not scattered by noise.** The Helix, the Butterfly,
-  the jet galaxy and the Endurance sit at fixed directions so each is always in the same
-  part of the sky. They cost almost nothing because `skyFrame()` rejects on a dot product
-  before any noise is evaluated. Keep them dim: same as stars, an overdriven one tonemaps
-  to white through ACES and the hue you just wrote is thrown away.
-- **Aiming at one by hand is guesswork** — pointing straight at it puts it behind the
-  hole, and an azimuth offset moves it diagonally once the pitch is steep. Use
+- **Deep-sky objects are hand-placed, not scattered by noise.** The Helix, the Butterfly
+  and the jet galaxy sit at fixed directions so each is always in the same part of the
+  sky. They cost almost nothing because `skyFrame()` rejects on a dot product before any
+  noise is evaluated. Keep them dim: same as stars, an overdriven one tonemaps to white
+  through ACES and the hue you just wrote is thrown away.
+- **The Endurance is not one of them.** It used to be, and being at infinity meant it took
+  no lensing, never passed behind anything and slid across the sky instead of holding a
+  place in it. It is now an SDF (`sdShip`) marched inside the geodesic loop, so it gets
+  all three for free. Two things keep it affordable, and removing either is a mistake:
+  `sdShip` is called only when `dot(qs, qs) < SHIP_NEAR2` — unconditionally, it is up to
+  310 trig-carrying evaluations per ray across the whole frame — and `SHIP_NEAR2` must
+  stay larger than `(SHIP_BOUND + 0.9)^2`, because 0.9 is the coarsest step the marcher
+  takes and a ray must never cross from "not near" to "inside the hull" in one of them.
+- **The ship is sized by `SHIP_R` alone**; the tube, the pods and the hub are ratios of
+  it. Don't thin the tube below about 15% of the ring: the whole ship is a dozen pixels
+  across, there is one sample per pixel, and anything narrower than ~2 px crawls and
+  sparkles instead of reading as a solid.
+- **Anything small is invisible against the inner disk** — that region tonemaps to white,
+  so a lit hull has nothing to contrast with. `SHIP_POS` is well above the disk plane for
+  that reason, not an arbitrary choice.
+- **Aiming at a *sky* object by hand is guesswork** — pointing straight at it puts it
+  behind the hole, and an azimuth offset moves it diagonally once the pitch is steep. Use
   `node tools/aim.js <x> <y> <z> [screenX] [screenY]` to get the `--look=` angles, then
   `npx electron . --mode=window --look=<orbit>,<tilt> --shot=out.png`. Expect the object
   to land slightly further from the centre than asked: the solver is a straight line and
-  the real ray is lensed outward.
+  the real ray is lensed outward. **`aim.js` is wrong for anything nearby** — it solves
+  for a direction from the origin, and a body close enough to have parallax is not seen
+  along that direction from a camera 28 units out. Project it properly instead.
+- **A black `--shot` on the first run after a shader change is usually not a bug.** The
+  shot fires on a fixed 4 s timer; a cold compile of SCENE_FRAG can overrun it, and you
+  get the HUD stuck on "STARTING…" over an empty frame. Run it a second time with the
+  driver's cache warm before believing you broke something.
 - **Nothing in the sky is a fixed colour.** The galactic arm and the big nebula take their
   hue from `nebulaHue()`, which pulls a vivid version of the theme's `uNebula` (the preset
   values are dim and desaturated because they're used as a wash elsewhere). Hardcoding a

@@ -98,6 +98,11 @@ const DEFAULTS = {
   // Flatten every launcher icon to one colour so a desktop full of loud app
   // logos reads as bodies in orbit rather than a scattered toolbar.
   orbitTintIcons: true,
+
+  // The first-run guide has been put up once. Only ever consulted so that the
+  // act of showing it can be recorded; whether it appears is decided by
+  // firstRun, which is about the config file existing at all.
+  seenWelcome: false,
 };
 
 // --demo-audio: ignore capture and drive the visuals from a synthetic beat.
@@ -121,6 +126,11 @@ let attachedToDesktop = false;
 let audioSource = 'starting…';
 let quitting = false;
 let shotPath = null;
+let welcomeWin = null;
+// Set when there was no config file to read at all, which is the only honest
+// signal that nobody has ever run this. A `seenWelcome` flag alone would fire
+// the guide at every existing user the first time they updated.
+let firstRun = false;
 
 function allWindows() {
   return [win, ...wins.map((e) => e.win)].filter((w) => w && !w.isDestroyed());
@@ -148,7 +158,8 @@ function loadConfig() {
     const raw = fs.readFileSync(configPath, 'utf8').replace(/^﻿/, '');
     Object.assign(config, JSON.parse(raw));
   } catch (err) {
-    if (err.code !== 'ENOENT') console.error('[config] ignoring unreadable config:', err.message);
+    if (err.code === 'ENOENT') firstRun = true;
+    else console.error('[config] ignoring unreadable config:', err.message);
   }
   if (!MODES.includes(config.mode)) config.mode = DEFAULTS.mode;
   if (!THEMES[config.theme]) config.theme = DEFAULTS.theme;
@@ -742,6 +753,60 @@ function nearestVolumeStep() {
     Math.abs(v - nowPlaying.volume) < Math.abs(best - nowPlaying.volume) ? v : best);
 }
 
+// ---------------------------------------------------------------------------
+//  First-run guide
+//
+//  A real window rather than an overlay in the renderer, because the default
+//  mode is wallpaper and a wallpaper window can never be clicked: the one
+//  screen that has to be dismissible is the one that cannot rely on any of
+//  that machinery. It is also the only part of the app that is allowed to
+//  steal focus, and only once.
+// ---------------------------------------------------------------------------
+function showWelcome() {
+  if (welcomeWin && !welcomeWin.isDestroyed()) {
+    welcomeWin.show();
+    welcomeWin.focus();
+    return;
+  }
+  welcomeWin = new BrowserWindow({
+    width: 720,
+    height: 780,
+    minWidth: 480,
+    minHeight: 420,
+    title: 'Black Hole Visualizer - Controls',
+    icon: iconImage(256),
+    backgroundColor: '#08060c',
+    autoHideMenuBar: true,
+    maximizable: false,
+    show: false,
+    // Windows draws a light caption bar by default, which sits on top of a
+    // near-black page looking like a rendering fault. An overlay caption lets
+    // the buttons be drawn in the page's own colours; the header carries
+    // -webkit-app-region: drag so the window can still be moved.
+    titleBarStyle: 'hidden',
+    titleBarOverlay: { color: '#08060c', symbolColor: '#e8e2ee', height: 36 },
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+  welcomeWin.setMenuBarVisibility(false);
+  welcomeWin.once('ready-to-show', () => welcomeWin.show());
+  welcomeWin.on('closed', () => { welcomeWin = null; });
+  welcomeWin.loadFile(path.join(__dirname, 'src', 'welcome.html'));
+}
+
+// Written the moment the guide is shown, not when it is dismissed. Until a
+// tray interaction happens there is no config file on disk, so a first run
+// that ends with the window simply closed would otherwise still count as a
+// first run the next time and show the guide again.
+function maybeShowWelcome() {
+  if (!firstRun || shotPath) return;
+  setConfig({ seenWelcome: true });
+  showWelcome();
+}
+
 function buildTray() {
   if (!tray) {
     tray = new Tray(iconImage(20));
@@ -985,6 +1050,7 @@ function buildTray() {
       click: (i) => setConfig({ launchAtLogin: setAutoStart(i.checked) }),
     },
     { label: 'Restart visualizer', click: () => createWindow(startupMode()) },
+    { label: 'Controls and shortcuts', click: () => showWelcome() },
     { label: 'Open config folder', click: () => shell.showItemInFolder(configPath) },
     { type: 'separator' },
     { label: 'Quit', click: () => { quitting = true; app.quit(); } },
@@ -1230,6 +1296,13 @@ function setupIpc() {
     try { await orbitLoading; } catch { /* the load logs its own failures */ }
     return orbitItems;
   });
+  ipcMain.on('welcome-close', (e) => {
+    // Scoped to the sender: the guide shares preload.js with the visualiser,
+    // so this must not become a way for the main renderer to close a window
+    // it does not own.
+    const w = BrowserWindow.fromWebContents(e.sender);
+    if (w && w === welcomeWin) w.close();
+  });
   ipcMain.handle('get-lyrics', () => lyrics);
   ipcMain.on('orbit-launch', (_e, p) => launchOrbitItem(p));
   ipcMain.on('orbit-context', (e, p) =>
@@ -1339,6 +1412,10 @@ if (!app.requestSingleInstanceLock()) {
     startNowPlaying();
     watchDesktopFolder();
     loadOrbitItems();
+
+    // After the tray exists, so that the guide's "it lives in the tray" is
+    // true by the time anyone reads it.
+    maybeShowWelcome();
 
     // Belt and braces: the listeners above only fire on a *change*. If a
     // monitor was already mid-renegotiation when getAllDisplays() was first

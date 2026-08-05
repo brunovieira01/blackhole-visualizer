@@ -30,4 +30,7 @@ contextBridge.exposeInMainWorld('bhv', {
   reportSource: (src) => ipcRenderer.send('source', src),
   hide: () => ipcRenderer.send('hide'),
   toggleFullscreen: () => ipcRenderer.send('toggle-fullscreen'),
+  // Only the first-run guide uses this; it shares this bridge rather than
+  // carrying a second preload for one call.
+  closeWelcome: () => ipcRenderer.send('welcome-close'),
 });

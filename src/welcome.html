@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta http-equiv="Content-Security-Policy"
+      content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'" />
+<title>Black Hole Visualizer — Controls</title>
+<style>
+  /* Deliberately self-contained. style.css is built around a transparent
+     canvas overlay and assumes the visualiser behind it; none of that applies
+     to an ordinary opaque window, and importing it drags in rules that fight
+     this layout. */
+  :root {
+    --bg:     #08060c;
+    --panel:  #100c16;
+    --line:   #241c2e;
+    --text:   #e8e2ee;
+    --dim:    #9a8fa8;
+    --accent: #ffb066;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 14px/1.55 "Segoe UI", system-ui, sans-serif;
+    display: flex;
+    flex-direction: column;
+  }
+  header {
+    /* Top padding clears the overlay caption buttons, and the whole strip is
+       the drag handle -- with titleBarStyle 'hidden' there is no native bar
+       left to grab. The button itself must opt back out or it cannot be
+       clicked. */
+    padding: 44px 32px 18px;
+    border-bottom: 1px solid var(--line);
+    flex: 0 0 auto;
+    -webkit-app-region: drag;
+  }
+  header * { -webkit-app-region: no-drag; }
+  h1 {
+    margin: 0 0 6px;
+    font: 300 21px/1.2 "Segoe UI", system-ui, sans-serif;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+  }
+  h1 span { color: var(--dim); }
+  .sub { margin: 0; color: var(--dim); font-size: 13px; }
+
+  main { flex: 1 1 auto; overflow-y: auto; padding: 22px 32px 28px; }
+
+  h2 {
+    margin: 26px 0 10px;
+    font: 600 11px/1 "Segoe UI", system-ui, sans-serif;
+    letter-spacing: 0.19em;
+    text-transform: uppercase;
+    color: var(--accent);
+  }
+  h2:first-child { margin-top: 0; }
+
+  table { width: 100%; border-collapse: collapse; }
+  td { padding: 6px 0; vertical-align: top; border-bottom: 1px solid var(--line); }
+  tr:last-child td { border-bottom: none; }
+  td.key { width: 132px; padding-right: 16px; white-space: nowrap; }
+  td.what { color: var(--dim); }
+
+  kbd {
+    display: inline-block;
+    min-width: 22px;
+    padding: 2px 7px;
+    border: 1px solid var(--line);
+    border-bottom-width: 2px;
+    border-radius: 4px;
+    background: var(--panel);
+    color: var(--text);
+    font: 12px/1.4 ui-monospace, "Cascadia Mono", Consolas, monospace;
+    text-align: center;
+  }
+
+  .note {
+    margin: 20px 0 0;
+    padding: 14px 16px;
+    border-left: 2px solid var(--accent);
+    background: var(--panel);
+    color: var(--dim);
+    font-size: 13px;
+  }
+  .note b { color: var(--text); font-weight: 600; }
+
+  footer {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 16px 32px;
+    border-top: 1px solid var(--line);
+  }
+  footer p { margin: 0; color: var(--dim); font-size: 12.5px; }
+  button {
+    padding: 9px 26px;
+    border: 1px solid var(--accent);
+    border-radius: 5px;
+    background: transparent;
+    color: var(--accent);
+    font: 600 13px/1 "Segoe UI", system-ui, sans-serif;
+    letter-spacing: 0.06em;
+    cursor: pointer;
+  }
+  button:hover  { background: var(--accent); color: #17110b; }
+  button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+</style>
+</head>
+<body>
+  <header>
+    <h1>Black Hole <span>/ Visualizer</span></h1>
+    <p class="sub">A one-time tour of the controls. You can reopen this any time from the tray.</p>
+  </header>
+
+  <main>
+    <h2>Where everything lives</h2>
+    <p class="sub">
+      There is no settings window. The full menu — modes, themes, volume, lyrics, the orbit
+      launcher, quality and autostart — lives in the <b>tray icon</b>, at the bottom-right
+      of the taskbar next to the clock. On Windows 11 it usually starts hidden: click the
+      <kbd>^</kbd> arrow to the left of the tray icons to find it, or pin it for good under
+      Settings → Personalization → Taskbar → Other system tray icons.
+    </p>
+
+    <h2>Anywhere in Windows</h2>
+    <table>
+      <tr><td class="key"><kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>B</kbd></td>
+          <td class="what">Show or hide the visualiser</td></tr>
+      <tr><td class="key">Double-click tray</td>
+          <td class="what">Jump to window mode, or bring the window back</td></tr>
+    </table>
+
+    <h2>While the window has focus</h2>
+    <table>
+      <tr><td class="key"><kbd>1</kbd> – <kbd>6</kbd></td><td class="what">Switch theme</td></tr>
+      <tr><td class="key"><kbd>H</kbd></td><td class="what">Show or hide the HUD</td></tr>
+      <tr><td class="key"><kbd>N</kbd></td><td class="what">Now-playing panel</td></tr>
+      <tr><td class="key"><kbd>L</kbd></td><td class="what">Synced lyrics</td></tr>
+      <tr><td class="key"><kbd>C</kbd></td><td class="what">Clock</td></tr>
+      <tr><td class="key"><kbd>O</kbd></td><td class="what">Orbit launcher — your desktop shortcuts as orbiting bodies</td></tr>
+      <tr><td class="key"><kbd>F</kbd></td><td class="what">Fullscreen</td></tr>
+      <tr><td class="key"><kbd>Esc</kbd></td><td class="what">Hide to the tray</td></tr>
+    </table>
+
+    <h2>Playback</h2>
+    <table>
+      <tr><td class="key"><kbd>Space</kbd></td><td class="what">Play / pause</td></tr>
+      <tr><td class="key"><kbd>,</kbd></td><td class="what">Previous track</td></tr>
+      <tr><td class="key"><kbd>.</kbd></td><td class="what">Next track</td></tr>
+    </table>
+
+    <h2>The visuals</h2>
+    <table>
+      <tr><td class="key"><kbd>↑</kbd> <kbd>↓</kbd></td>
+          <td class="what">Reactivity — how hard the disk answers the music</td></tr>
+      <tr><td class="key"><kbd>←</kbd> <kbd>→</kbd></td>
+          <td class="what">Wave depth, from off to turbulent</td></tr>
+      <tr><td class="key">Drag</td><td class="what">Orbit the camera</td></tr>
+    </table>
+
+    <h2>The three modes</h2>
+    <table>
+      <tr><td class="key">Wallpaper</td>
+          <td class="what">The default. Becomes your literal desktop background; icons stay
+              on top and keep working, and it never appears in Alt+Tab.</td></tr>
+      <tr><td class="key">Overlay</td>
+          <td class="what">Fullscreen and click-through — only the glow is drawn, the rest
+              of your screen shows through.</td></tr>
+      <tr><td class="key">Window</td>
+          <td class="what">An ordinary window, with the HUD. The easiest one to start with.</td></tr>
+    </table>
+
+    <p class="note">
+      <b>It listens to your speakers, not your microphone.</b> Audio comes from WASAPI
+      loopback, which captures what is already being played and never opens an input
+      device. Nothing is recorded and nothing leaves your machine.
+    </p>
+  </main>
+
+  <footer>
+    <p>Reopen from the tray menu → <b>Controls and shortcuts</b>.</p>
+    <button id="go" autofocus>Get started</button>
+  </footer>
+
+<script>
+  const close = () => window.bhv?.closeWelcome();
+  document.getElementById('go').addEventListener('click', close);
+  window.addEventListener('keydown', (e) => { if (e.key === 'Escape') close(); });
+</script>
+</body>
+</html>

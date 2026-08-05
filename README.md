@@ -30,6 +30,10 @@ Add `-Startup` to have it come back on every login — or tick **Start with Wind
 the tray, which does the same thing. Either way it's a shortcut in your Startup folder,
 which you can delete by hand; the app notices and updates the tray to match.
 
+The very first launch opens a short **guide to the controls** — the keys, the three modes,
+and where the tray icon is hiding. It appears once, on a machine that has never run this
+before, and never again; the tray menu has **Controls and shortcuts** if you want it back.
+
 Everything else lives in the **tray icon** next to the clock. No window to keep open,
 nothing to babysit.
 
@@ -208,29 +212,28 @@ remembers on disk that it hid them and puts them back on next launch.
 
 It's **off by default**: a fresh clone should never empty someone's desktop unannounced.
 
-### It only runs in wallpaper mode
+### What changes between modes
 
-Switching the toggle on while you're in **window** mode does nothing visible, and that is
-not a bug. The launcher needs the desktop layer it draws onto, and in window mode there
-is no desktop to replace and no icons to stand in for.
+The bodies themselves are drawn in **every** mode, window included — the renderer gates
+them on the setting alone. What differs is how they are clicked, and what happens to the
+icons they stand in for.
 
-The deeper reason is how it reads the mouse. A window in the wallpaper layer can never
-receive mouse input — Explorer's `SHELLDLL_DefView` sits above it and eats every click on
-the desktop, and no window style changes that. So the launcher doesn't use DOM events at
-all: it samples the global cursor (`GetCursorPos` / `GetAsyncKeyState` / `WindowFromPoint`)
-on a 16 ms timer and hit-tests the bodies itself. Nothing is hooked and nothing is
-injected. That machinery has nothing to attach to outside the wallpaper layer, so the
-checks are explicit — `orbitActive()` requires the mode not be `window`, and pointer
-forwarding starts only in `wallpaper`.
+In **window** and **overlay** mode there is nothing special going on: the bodies are DOM
+elements and they get ordinary mouse events. Your real desktop icons are left alone,
+because the launcher is only sitting in a window and has not taken the desktop over.
 
-Two consequences that also look like bugs and aren't: the orbit **pauses** whenever your
-cursor is on the desktop, because you can't click a moving target; and synthetic
-**right-click is ignored**, because Explorer still shows its own context menu and two
-menus at once is worse than none.
+**Wallpaper** mode is the awkward one. A window in the wallpaper layer can never receive
+mouse input — Explorer's `SHELLDLL_DefView` sits above it and eats every click on the
+desktop, and no window style changes that. So there the launcher does not use DOM events
+at all: it samples the global cursor (`GetCursorPos` / `GetAsyncKeyState` /
+`WindowFromPoint`) on a 16 ms timer and hit-tests the bodies itself. Nothing is hooked and
+nothing is injected. Hiding the real icons is also wallpaper-only, for the obvious reason
+that everywhere else they are not in the way.
 
-So it's wallpaper mode *or* window mode, not both. Worth knowing if you've settled on
-window mode for performance — on a laptop with integrated graphics, ray-marching this
-scene across several monitors is often the reason to.
+Two consequences of that forwarding, which look like bugs and aren't: the orbit **pauses**
+whenever your cursor is on the desktop, because you can't click a moving target; and
+synthetic **right-click is ignored**, because Explorer still shows its own context menu
+and two menus at once is worse than none. Both are wallpaper-mode only.
 
 ---
 

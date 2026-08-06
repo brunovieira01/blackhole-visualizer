@@ -72,7 +72,18 @@
   <div id="hud" class="hud">
     <div class="hud-title">BLACK&nbsp;HOLE<span class="dim">&nbsp;/&nbsp;VISUALIZER</span></div>
     <div class="hud-row"><span class="k">source</span><span class="v" id="hud-source">starting…</span></div>
-    <div class="hud-row"><span class="k">mode</span><span class="v" id="hud-mode">—</span></div>
+
+    <!-- The mode switch. Clickable in window mode, which is the point: it is
+         how you turn the wallpaper on without hunting through the tray. -->
+    <div class="hud-row">
+      <span class="k">mode</span>
+      <span class="v hud-seg" id="hud-mode">
+        <button type="button" data-mode="window">window</button>
+        <button type="button" data-mode="wallpaper">wallpaper</button>
+        <button type="button" data-mode="overlay">overlay</button>
+      </span>
+    </div>
+
     <div class="hud-row"><span class="k">theme</span><span class="v" id="hud-theme">—</span></div>
     <div class="hud-row"><span class="k">wave</span><span class="v" id="hud-warp">—</span></div>
     <div class="hud-row"><span class="k">fps</span><span class="v" id="hud-fps">—</span></div>
@@ -80,7 +91,8 @@
       <b>H</b> hud &nbsp; <b>1–6</b> theme &nbsp; <b>N</b> now playing &nbsp; <b>F</b> fullscreen<br />
       <b>↑↓</b> reactivity &nbsp; <b>←→</b> wave depth &nbsp; <b>drag</b> orbit<br />
       <b>space</b> play/pause &nbsp; <b>,</b> prev &nbsp; <b>.</b> next<br />
-      <b>O</b> orbit launcher &nbsp; <b>L</b> lyrics &nbsp; <b>C</b> clock
+      <b>O</b> orbit launcher &nbsp; <b>L</b> lyrics &nbsp; <b>C</b> clock<br />
+      <b>ctrl+alt+W</b> wallpaper on/off, from anywhere in Windows
     </div>
   </div>
 

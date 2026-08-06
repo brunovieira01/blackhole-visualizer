@@ -15,7 +15,49 @@ bodies.
 
 ---
 
-## Quick start
+## Install
+
+Grab **`Black Hole Visualizer <version> Setup.exe`** from the
+[releases page](https://github.com/brunovieira01/blackhole-visualizer/releases) and run
+it. Nothing else is needed — no Node, no npm, no build step; Electron and every
+dependency are inside.
+
+The installer is **per-user**: it goes into `%LOCALAPPDATA%\Programs`, asks for no
+administrator prompt, and touches nothing outside your own account. There is also a
+**`.zip`** on the same page if you would rather install nothing at all — unzip it
+anywhere and run the `.exe` inside.
+
+> Windows will show a blue **"Windows protected your PC"** box the first time, because
+> the installer isn't code-signed (a certificate costs a few hundred a year). Click
+> **More info → Run anyway**. If that's not something you want to ask people to do, hand
+> them the `.zip` instead — SmartScreen usually leaves it alone.
+
+It opens **in a window** the first time, with a short guide to the controls. Making it
+your desktop background is one click in the HUD's `mode` row — or `Ctrl` `Alt` `W`,
+which toggles it from anywhere in Windows. Everything else lives in the **tray icon**
+next to the clock.
+
+### What it touches on your PC
+
+The whole list, and it's meant to stay this short:
+
+| | |
+|---|---|
+| **Its settings** | One `config.json` in its own folder under `%APPDATA%`. Nothing is written anywhere else. |
+| **Start with Windows** | Off unless you turn it on, and then it's a shortcut in your Startup folder — no service, no scheduled task, no registry Run key. You can delete it by hand and the tray checkbox notices. |
+| **Desktop icons** | Only the [orbit launcher](#the-orbit-launcher) hides them, only after you say yes to a dialog that explains it, and they come back when the app quits. It's the same switch as right-click desktop → View → Show desktop icons. |
+
+No registry keys, no system settings, no drivers, no admin rights, nothing running when
+the app isn't. Tray → **Undo changes to this PC** puts all three back and quits;
+uninstalling removes the settings folder as well.
+
+One caveat worth knowing: if you uninstall *while* the orbit launcher has your icons
+hidden, the uninstaller can't put them back — the app does that when it exits, and the
+uninstaller kills it first. Right-click the desktop → **View** → **Show desktop icons**.
+
+---
+
+## Running from source
 
 ```powershell
 git clone https://github.com/brunovieira01/blackhole-visualizer.git
@@ -23,22 +65,16 @@ cd blackhole-visualizer
 powershell -ExecutionPolicy Bypass -File setup.ps1
 ```
 
-That installs the dependencies, builds the icons, and drops a **Black Hole Visualizer**
-shortcut on your Desktop. Double-click it and the black hole becomes your wallpaper.
+That installs the dependencies and builds the icons, and writes nothing outside the
+folder. Double-click `Start Black Hole.vbs` to launch with no console window. Add
+`-Shortcut` for a Desktop icon or `-Startup` to run at login — both opt-in.
 
-Add `-Startup` to have it come back on every login — or tick **Start with Windows** in
-the tray, which does the same thing. Either way it's a shortcut in your Startup folder,
-which you can delete by hand; the app notices and updates the tray to match.
+To build the installer yourself:
 
-The very first launch opens a short **guide to the controls** — the keys, the three modes,
-and where the tray icon is hiding. It appears once, on a machine that has never run this
-before, and never again; the tray menu has **Controls and shortcuts** if you want it back.
-
-Everything else lives in the **tray icon** next to the clock. No window to keep open,
-nothing to babysit.
-
-Prefer not to use the setup script? `npm install`, then double-click
-`Start Black Hole.vbs` — it launches with no console window at all.
+```powershell
+npm run dist     # -> dist\Black Hole Visualizer 1.0.0 Setup.exe, and a .zip
+npm run pack     # unpacked into dist\win-unpacked, no installer (faster)
+```
 
 ---
 
@@ -46,12 +82,20 @@ Prefer not to use the setup script? `npm install`, then double-click
 
 | Mode | What it does |
 |---|---|
-| **Desktop wallpaper** *(default)* | Becomes the literal wallpaper. Desktop icons stay on top and stay clickable — or [go into orbit](#the-orbit-launcher) if you'd rather. Win+D reveals it instead of hiding it, no taskbar entry. |
+| **Window** *(default)* | An ordinary window. Drag to orbit the camera, and you get the HUD — which is also where the mode switch lives. |
+| **Desktop wallpaper** | Becomes the literal wallpaper. Desktop icons stay on top and stay clickable — or [go into orbit](#the-orbit-launcher) if you'd rather. Win+D reveals it instead of hiding it, no taskbar entry. |
 | **Overlay** | Fullscreen, always on top, click-through. Alpha follows luminance, so only the glow is drawn and the rest of your screen shows through. |
-| **Window** | An ordinary window. Drag to orbit the camera, and you get a HUD with the current state. |
 
-Switch between them from the tray menu. `Ctrl` + `Alt` + `B` toggles it on and off from
-anywhere.
+Switch between them from the `mode` row in the HUD, or the tray menu, or with
+`Ctrl` + `Alt` + `W` — which toggles the wallpaper from anywhere in Windows, and is how
+you get back out of it. That last part matters: wallpaper mode sits *below* Explorer's
+icon layer, so there is nothing on screen to click. `Ctrl` + `Alt` + `B` hides and shows
+the visualiser without changing mode.
+
+It starts in a window rather than as your wallpaper on purpose. Replacing someone's
+desktop background the moment they first open something is a rude way to say hello, and
+on a machine where the wallpaper embedding fails it just looks broken. Once you pick a
+mode it's remembered.
 
 ![Window mode with the HUD](assets/preview-window.jpg)
 
@@ -205,12 +249,16 @@ shrink and dim as they pass behind.
   rather than assuming a height, and it squashes symmetrically so it stays an ellipse.
 - Size and speed are in the tray; **Still** parks the ring if you'd rather it didn't move.
 
-By default it also **hides the real desktop icons**, since having both is just clutter.
-That's the same toggle as right-click → View → Show desktop icons, so you can always put
-them back by hand. The app restores them when it quits, and if it's killed outright it
-remembers on disk that it hid them and puts them back on next launch.
+It can also **hide the real desktop icons**, since having both is just clutter — but it
+**asks first**, once, with a dialog that says what it is about to do and how to undo it.
+That's the only thing this app changes about Windows itself, so it doesn't get to happen
+because you ticked a box labelled something else. It's the same toggle as right-click →
+View → Show desktop icons, so you can always put them back by hand. The app restores them
+when it quits, and if it's killed outright it remembers on disk that it hid them and puts
+them back on next launch.
 
-It's **off by default**: a fresh clone should never empty someone's desktop unannounced.
+The launcher itself is **off by default**: a fresh install should never empty someone's
+desktop unannounced.
 
 ### What changes between modes
 
@@ -475,6 +523,15 @@ your GPU on a still image all day.
 | `Esc` | Hide to tray |
 
 Themes: Gargantua, Cygnus X-1, Nova, Emerald, Ember, Monochrome.
+
+Three shortcuts work **anywhere in Windows**, not just when the window has focus, because
+in wallpaper mode nothing on screen can be clicked:
+
+| Key | |
+|---|---|
+| `Ctrl` `Alt` `W` | Wallpaper on / off |
+| `Ctrl` `Alt` `B` | Show / hide the visualiser |
+| `Ctrl` `Alt` `←` `→` `space` | Previous / next / play-pause |
 
 ---
 

@@ -1,15 +1,22 @@
-# One-time setup: install dependencies, build the icons, and create shortcuts.
+# One-time setup for running from source: install dependencies and build the
+# icons. If you just want to *use* the app, build an installer with
+# `npm run dist` and run that instead - this script is the developer path.
+#
+# Nothing is written outside this folder unless you ask for it: both shortcuts
+# are opt-in, because a setup script has no business putting files on someone
+# else's Desktop or into their Startup folder without being told to.
 #
 # NOTE: keep this file pure ASCII. Windows PowerShell 5.1 reads BOM-less files
 # as CP1252, where a UTF-8 em-dash decodes into a curly quote -- which PS
 # accepts as a string delimiter, so one stray dash breaks the whole parse.
 #
 #   powershell -ExecutionPolicy Bypass -File setup.ps1
-#   powershell -ExecutionPolicy Bypass -File setup.ps1 -Startup   # + run at login
+#   powershell -ExecutionPolicy Bypass -File setup.ps1 -Shortcut   # + Desktop icon
+#   powershell -ExecutionPolicy Bypass -File setup.ps1 -Startup    # + run at login
 #
 param(
   [switch]$Startup,
-  [switch]$NoShortcut
+  [switch]$Shortcut
 )
 
 $ErrorActionPreference = 'Stop'
@@ -55,7 +62,7 @@ function New-Shortcut([string]$LinkPath) {
   Write-Host "  created $LinkPath" -ForegroundColor Green
 }
 
-if (-not $NoShortcut) {
+if ($Shortcut) {
   Write-Host "> creating Desktop shortcut"
   New-Shortcut (Join-Path ([Environment]::GetFolderPath('Desktop')) 'Black Hole Visualizer.lnk')
 }
@@ -66,5 +73,9 @@ if ($Startup) {
 }
 
 Write-Host "`nDone." -ForegroundColor Green
-Write-Host "Launch it with the Desktop shortcut, or double-click 'Start Black Hole.vbs'."
+Write-Host "Launch it by double-clicking 'Start Black Hole.vbs' in this folder."
+Write-Host "It opens in a window; the mode row in the HUD switches it to your wallpaper."
 Write-Host "Everything else lives in the tray icon (bottom-right, next to the clock)."
+if (-not $Shortcut) {
+  Write-Host "Nothing was written outside this folder. Re-run with -Shortcut for a Desktop icon."
+}

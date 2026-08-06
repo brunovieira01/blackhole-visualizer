@@ -1,0 +1,76 @@
+# ---------------------------------------------------------------------------
+#  Packaging. `npm run dist` produces two things in dist/:
+#
+#    Black Hole Visualizer <version> Setup.exe   an installer
+#    Black Hole Visualizer <version>.zip         unzip and run, installs nothing
+#
+#  The installer is deliberately per-user. It goes into %LOCALAPPDATA%\Programs,
+#  needs no administrator prompt, and touches nothing outside the current
+#  account -- no Program Files, no HKLM, no system-wide anything. That is a
+#  smaller footprint than the machine-wide alternative and it is the whole
+#  reason `perMachine` and `allowElevation` are both off.
+# ---------------------------------------------------------------------------
+appId: com.brunovieira.blackholevisualizer
+productName: Black Hole Visualizer
+copyright: MIT licensed
+
+directories:
+  output: dist
+  buildResources: build
+
+# An explicit list, not the default "everything". The dev tools (probes, the
+# aiming solver, the tests, the fake SMTC session) and the README screenshots
+# have no business in something other people install; nowplaying.ps1 is the one
+# file in tools/ the app actually needs at runtime.
+files:
+  - main.js
+  - preload.js
+  - package.json
+  - src/**/*
+  - lib/**/*
+  - native/**/*
+  - assets/icon.png
+  - assets/icon.ico
+  - tools/nowplaying.ps1
+
+# Everything else is read through Electron's patched `fs` and works fine inside
+# the archive. These three are read by something that is not us:
+#   nowplaying.ps1  powershell.exe -File cannot open a file inside app.asar
+#   icon.ico        Explorer draws it on the optional Startup shortcut
+#   koffi           a .node is dlopen'd by the OS loader, which needs a path
+# main.js resolves these through realFile(), which rewrites app.asar ->
+# app.asar.unpacked. Adding an entry here means adding it there too.
+asarUnpack:
+  - tools/nowplaying.ps1
+  - assets/icon.ico
+  - node_modules/koffi/**
+
+win:
+  icon: assets/icon.ico
+  # x64 only. koffi ships per-architecture binaries and the app is Win10+
+  # anyway, where 32-bit is long gone; arm64 would need its own koffi build
+  # and a machine to test it on.
+  target:
+    - target: nsis
+      arch: [x64]
+    - target: zip
+      arch: [x64]
+
+nsis:
+  # A real installer with pages, not electron-builder's one-click default that
+  # silently installs and launches the moment it is double-clicked. Someone
+  # installing this should see where it is going and be able to say no.
+  oneClick: false
+  perMachine: false
+  allowElevation: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  runAfterFinish: true
+  # Handled explicitly in build/installer.nsh instead: this flag deletes
+  # %APPDATA%\<productName>, and our settings live in %APPDATA%\<package name>
+  # because that is what Electron uses for app.getPath('userData').
+  deleteAppDataOnUninstall: false
+  include: build/installer.nsh
+  artifactName: ${productName} ${version} Setup.${ext}
+  uninstallDisplayName: ${productName}

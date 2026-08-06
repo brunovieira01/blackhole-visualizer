@@ -36,6 +36,16 @@ if (!process.argv.includes('--no-gpu-raster')) {
 }
 app.disableDomainBlockingFor3DAPIs?.();
 
+// Packaged, the app lives inside `resources/app.asar`. Electron patches `fs`
+// so *our* reads work in there, but nothing else's do: PowerShell cannot run a
+// script out of an archive and Explorer cannot draw a shortcut icon out of one.
+// Those files are listed under `asarUnpack` in electron-builder.yml, which puts
+// them in `app.asar.unpacked/` — this rewrites a path to point at the real file.
+// A no-op when running from source, where there is no archive in the path.
+function realFile(p) {
+  return p.replace(`${path.sep}app.asar${path.sep}`, `${path.sep}app.asar.unpacked${path.sep}`);
+}
+
 const MODES = ['wallpaper', 'overlay', 'window'];
 const THEMES = {
   gargantua: 'Gargantua',
@@ -49,11 +59,17 @@ const THEMES = {
 // Bump when a *default* changes in a way existing users should pick up, and
 // add a migration below. Without this, the first tray interaction freezes
 // every current value to disk and later default changes never reach anyone.
-const CONFIG_VERSION = 2;
+const CONFIG_VERSION = 3;
 
 const DEFAULTS = {
   configVersion: CONFIG_VERSION,
-  mode: 'wallpaper',
+  // Window, deliberately — and there is no migration for it. A first launch
+  // that silently replaces someone's desktop background is a bad way to meet
+  // an app: it is the one mode you cannot click your way out of, and on a
+  // machine where the WorkerW embedding fails it just looks broken. Window
+  // mode shows the HUD, which is where the wallpaper switch lives. Anyone who
+  // already chose wallpaper has it written to their config and keeps it.
+  mode: 'window',
   theme: 'gargantua',
   quality: 'auto',
   reactivity: 1.0,
@@ -103,6 +119,11 @@ const DEFAULTS = {
   // act of showing it can be recorded; whether it appears is decided by
   // firstRun, which is about the config file existing at all.
   seenWelcome: false,
+  // "You are now the wallpaper, here is how to get back" — shown once, ever.
+  seenWallpaperNote: false,
+  // The user has agreed, at least once, to the launcher hiding the real
+  // desktop icons. Nothing here touches Explorer's state without it.
+  agreedHideIcons: false,
 };
 
 // --demo-audio: ignore capture and drive the visuals from a synthetic beat.
@@ -175,6 +196,16 @@ function migrateConfig() {
   // on by default now, so adopt it for anyone still pinned at 0.
   if (from < 2 && config.autoOrbit === 0) config.autoOrbit = DEFAULTS.autoOrbit;
 
+  // Hiding the desktop icons now needs an explicit yes. Anyone already running
+  // the launcher with it on has answered that question in practice, and being
+  // asked to re-approve something you have used for weeks is just noise.
+  if (from < 3 && config.orbitLauncher && config.orbitHideIcons) {
+    config.agreedHideIcons = true;
+  }
+  // Same for the "you are now the wallpaper" note: an existing wallpaper user
+  // knows, and a version bump is not the moment to explain it to them.
+  if (from < 3 && config.mode === 'wallpaper') config.seenWallpaperNote = true;
+
   config.configVersion = CONFIG_VERSION;
   saveConfig();
 }
@@ -195,7 +226,8 @@ function setConfig(patch, { recreate = false } = {}) {
   saveConfig();
   if (recreate) createWindow(config.mode);
   else for (const w of allWindows()) w.webContents.send('settings', config);
-  if ('orbitLauncher' in patch || 'orbitHideIcons' in patch) applyOrbitConfig();
+  if ('orbitLauncher' in patch || 'orbitHideIcons' in patch ||
+      'agreedHideIcons' in patch) applyOrbitConfig();
   if ('showLyrics' in patch) refreshLyrics();
   buildTray();
 }
@@ -393,6 +425,42 @@ function createWindow(mode) {
   startCoveredWatch();
 }
 
+// The single door into a mode change — tray, HUD switch and hotkey all come
+// through here so the "how do I get back" note can't be bypassed by one of
+// them.
+function setMode(v) {
+  if (!MODES.includes(v) || v === currentMode) return;
+  const toWallpaper = v === 'wallpaper';
+  setConfig({ mode: v }, { recreate: true });
+  if (toWallpaper) noteWallpaperMode();
+}
+
+// Wallpaper mode hides the HUD (it can't be clicked down there) and takes over
+// the desktop background, so the way back has to work from outside the app
+// entirely. This is that way, and it's why it's a *global* shortcut.
+function toggleWallpaperMode() {
+  setMode(currentMode === 'wallpaper' ? 'window' : 'wallpaper');
+}
+
+// Shown the first time someone becomes the wallpaper, and never again. Every
+// other mode can be dismissed with the window controls in front of you; this
+// one swallows the whole UI, and a user who doesn't know the way out has, as
+// far as they can tell, permanently replaced their desktop.
+function noteWallpaperMode() {
+  if (config.seenWallpaperNote) return;
+  setConfig({ seenWallpaperNote: true });
+  dialog.showMessageBox({
+    type: 'info',
+    title: 'Black Hole Visualizer',
+    message: 'The visualizer is now your desktop background.',
+    detail: 'Press Ctrl+Alt+W to switch back to a window — that works from ' +
+      'anywhere in Windows, and toggles the wallpaper on and off.\n\n' +
+      'Everything else lives in the tray icon, bottom-right next to the clock.',
+    buttons: ['Got it'],
+    noLink: true,
+  }).catch(() => { /* a dialog that fails to open must not take the app down */ });
+}
+
 // ---------------------------------------------------------------------------
 //  Orbit launcher
 //
@@ -476,7 +544,14 @@ function orbitContextMenu(p, owner) {
 // Anything that can end the process restores them (see restoreDesktopIcons).
 function applyDesktopIcons() {
   if (!desktop.available()) return;
-  const shouldHide = orbitActive() && config.orbitHideIcons && currentMode === 'wallpaper';
+  const wants = orbitActive() && config.orbitHideIcons && currentMode === 'wallpaper';
+
+  // The one thing this app does that changes Windows itself and outlives the
+  // process. It is not something to do to someone because they ticked a box
+  // labelled "orbit launcher" — ask first, once, and say how to undo it.
+  if (wants && !config.agreedHideIcons) { askHideIcons(); return; }
+
+  const shouldHide = wants;
   if (shouldHide && !iconsHiddenByUs) {
     if (desktop.iconsVisible() === true && desktop.setIconsVisible(false)) {
       markIconsHidden(true);
@@ -485,6 +560,35 @@ function applyDesktopIcons() {
     desktop.setIconsVisible(true);
     markIconsHidden(false);
   }
+}
+
+let askingHideIcons = false;
+
+// Answering "no" turns the *sub*-option off rather than the launcher: the
+// orbit is still worth having with the real icons left where they are, and
+// the two would otherwise be one all-or-nothing switch.
+function askHideIcons() {
+  if (askingHideIcons) return;
+  askingHideIcons = true;
+  dialog.showMessageBox({
+    type: 'question',
+    title: 'Black Hole Visualizer',
+    message: 'Hide your real desktop icons?',
+    detail: 'The orbit launcher draws your desktop shortcuts as bodies going ' +
+      'round the black hole. Hiding the real ones stops everything appearing ' +
+      'twice.\n\n' +
+      'This is a Windows setting, not something inside this app — it is the ' +
+      'same switch as right-clicking the desktop and choosing View > Show ' +
+      'desktop icons. The visualizer turns it back on when it quits, and you ' +
+      'can turn it back on yourself at any time.',
+    buttons: ['Hide them', 'Keep them visible'],
+    defaultId: 1,
+    cancelId: 1,
+    noLink: true,
+  }).then(({ response }) => {
+    askingHideIcons = false;
+    setConfig(response === 0 ? { agreedHideIcons: true } : { orbitHideIcons: false });
+  }).catch(() => { askingHideIcons = false; });
 }
 
 // Persisted, because the state lives in Explorer and outlives us: if this
@@ -654,7 +758,8 @@ function refreshGeometry() {
 //  Icon (regenerate with: node tools/make-icon.js)
 // ---------------------------------------------------------------------------
 const ICON_PNG = path.join(__dirname, 'assets', 'icon.png');
-const ICON_ICO = path.join(__dirname, 'assets', 'icon.ico');
+// Read by Explorer for the Startup shortcut, so it has to be a real file.
+const ICON_ICO = realFile(path.join(__dirname, 'assets', 'icon.ico'));
 const iconCache = new Map();
 
 function iconImage(size) {
@@ -728,6 +833,85 @@ function setAutoStart(enabled) {
 }
 
 // ---------------------------------------------------------------------------
+//  Renderer bootstrap failure
+//
+//  The realistic cause is no WebGL2 — a machine with hardware acceleration
+//  disabled, or a GPU too old for it. There is no useful degraded mode for a
+//  ray-marcher, so the honest thing is to say so. It matters most in the two
+//  passive modes: an exception there paints its stack trace onto a window
+//  nobody can read (behind the desktop icons, or click-through), so the app
+//  simply looks like it failed to start.
+// ---------------------------------------------------------------------------
+let fatalShown = false;
+
+function reportRendererFatal(msg) {
+  if (fatalShown || quitting) return;
+  fatalShown = true;
+  console.error('[renderer] fatal:', msg);
+  dialog.showMessageBox({
+    type: 'error',
+    title: 'Black Hole Visualizer',
+    message: 'This PC can\'t run the visualizer.',
+    detail: msg + '\n\nThe scene is ray-marched on the GPU and needs WebGL2. ' +
+      'If your graphics drivers are current, check that hardware acceleration ' +
+      'is switched on — some "performance" and battery-saver tools turn it off ' +
+      'system-wide.',
+    buttons: ['Quit', 'Leave it running'],
+    defaultId: 0,
+    cancelId: 1,
+    noLink: true,
+  }).then(({ response }) => {
+    if (response === 0) { quitting = true; app.quit(); }
+  }).catch(() => { /* nothing left to fall back to */ });
+}
+
+// ---------------------------------------------------------------------------
+//  Leave no trace
+//
+//  Everything this app can change outside its own folder is listed here, and
+//  all of it is undone from one menu item. The list is short by design and it
+//  is worth keeping that way: desktop icon visibility, a Startup shortcut, and
+//  its own settings file. No registry keys, no system settings, no files
+//  anywhere else. If you add something that outlives the process, add it here.
+// ---------------------------------------------------------------------------
+function undoLocalChanges() {
+  const link = startupLinkPath();
+  const hadLink = fs.existsSync(link);
+  const hidIcons = iconsHiddenByUs || config.orbitIconsHidden;
+
+  dialog.showMessageBox({
+    type: 'question',
+    title: 'Black Hole Visualizer',
+    message: 'Undo everything this app changed on this PC?',
+    detail: [
+      hidIcons ? '• show your real desktop icons again' : null,
+      hadLink ? '• remove the "start with Windows" shortcut' : null,
+      '• delete this app\'s settings file',
+      '',
+      'That is the complete list — nothing else on this PC was ever ' +
+      'changed. The visualizer will then quit; running it again starts it ' +
+      'fresh, as if it had never been opened.',
+    ].filter((l) => l !== null).join('\n'),
+    buttons: ['Undo and quit', 'Cancel'],
+    defaultId: 1,
+    cancelId: 1,
+    noLink: true,
+  }).then(({ response }) => {
+    if (response !== 0) return;
+    // Before the config file goes: restoreDesktopIcons() writes the cleared
+    // flag back to disk, and that write must not be what recreates the file
+    // we are about to delete.
+    restoreDesktopIcons();
+    setAutoStart(false);
+    quitting = true;
+    try { fs.rmSync(configPath, { force: true }); } catch (err) {
+      console.error('[undo] could not delete config:', err.message);
+    }
+    app.quit();
+  }).catch((err) => console.error('[undo]', err.message));
+}
+
+// ---------------------------------------------------------------------------
 //  Tray
 // ---------------------------------------------------------------------------
 function radio(list, current, onPick) {
@@ -756,11 +940,12 @@ function nearestVolumeStep() {
 // ---------------------------------------------------------------------------
 //  First-run guide
 //
-//  A real window rather than an overlay in the renderer, because the default
-//  mode is wallpaper and a wallpaper window can never be clicked: the one
-//  screen that has to be dismissible is the one that cannot rely on any of
-//  that machinery. It is also the only part of the app that is allowed to
-//  steal focus, and only once.
+//  A real window rather than an overlay in the renderer. The default mode is
+//  window now, but this is reopenable from the tray at any time — including
+//  while the visualiser is the wallpaper, where an in-renderer overlay could
+//  never be clicked or dismissed. The one screen that must always be
+//  dismissible is the one that cannot rely on any of that machinery. It is
+//  also the only part of the app allowed to steal focus, and only once.
 // ---------------------------------------------------------------------------
 function showWelcome() {
   if (welcomeWin && !welcomeWin.isDestroyed()) {
@@ -813,7 +998,7 @@ function buildTray() {
     tray.setToolTip('Black Hole Visualizer');
     tray.on('double-click', () => {
       if (currentMode === 'window') win?.show();
-      else setConfig({ mode: 'window' }, { recreate: true });
+      else setMode('window');
     });
   }
 
@@ -873,8 +1058,11 @@ function buildTray() {
       submenu: radio([
         ['wallpaper', modeNote],
         ['overlay', 'Overlay  (always on top, click-through)'],
-        ['window', 'Window'],
-      ], config.mode, (v) => setConfig({ mode: v }, { recreate: true })),
+        ['window', 'Window  (default)'],
+      ], currentMode, setMode)
+        // Shown on the wallpaper entry because that is the mode you cannot
+        // click your way out of — the hotkey is the way back.
+        .map((item, i) => (i === 0 ? { ...item, accelerator: 'Ctrl+Alt+W' } : item)),
     },
     {
       label: 'Theme',
@@ -1052,6 +1240,7 @@ function buildTray() {
     { label: 'Restart visualizer', click: () => createWindow(startupMode()) },
     { label: 'Controls and shortcuts', click: () => showWelcome() },
     { label: 'Open config folder', click: () => shell.showItemInFolder(configPath) },
+    { label: 'Undo changes to this PC…', click: undoLocalChanges },
     { type: 'separator' },
     { label: 'Quit', click: () => { quitting = true; app.quit(); } },
   ]));
@@ -1116,8 +1305,12 @@ let npRestartTimer = null;
 let nowPlaying = { kind: 'none' };
 
 function startNowPlaying() {
-  const script = path.join(__dirname, 'tools', 'nowplaying.ps1');
-  if (!fs.existsSync(script)) return;
+  // realFile: powershell.exe -File cannot read out of app.asar.
+  const script = realFile(path.join(__dirname, 'tools', 'nowplaying.ps1'));
+  if (!fs.existsSync(script)) {
+    console.error('[nowplaying] watcher script missing at ' + script);
+    return;
+  }
 
   try {
     npProc = spawn('powershell.exe', [
@@ -1308,7 +1501,13 @@ function setupIpc() {
   ipcMain.on('orbit-context', (e, p) =>
     orbitContextMenu(p, BrowserWindow.fromWebContents(e.sender)));
   ipcMain.handle('set', (_e, key, value) => {
-    if (key in DEFAULTS) setConfig({ [key]: value });
+    if (!(key in DEFAULTS)) return;
+    // Mode is the one setting that can't just be broadcast: window flags like
+    // `transparent` and `focusable` are fixed at construction, so the window
+    // set has to be rebuilt. Validated here as well as in the HUD, since this
+    // channel is reachable from any renderer.
+    if (key === 'mode') { setMode(value); return; }
+    setConfig({ [key]: value });
   });
   ipcMain.on('media', (_e, cmd) => {
     // Numbers are matched as invariant decimals on purpose — that is what the
@@ -1328,6 +1527,7 @@ function setupIpc() {
     }
   });
   ipcMain.on('source', (_e, src) => { audioSource = src; buildTray(); });
+  ipcMain.on('fatal', (_e, msg) => reportRendererFatal(String(msg || 'unknown error')));
   ipcMain.on('hide', (_e) => {
     const w = BrowserWindow.fromWebContents(_e.sender);
     if (currentMode === 'window' && w && !w.isDestroyed()) w.hide();
@@ -1435,6 +1635,10 @@ if (!app.requestSingleInstanceLock()) {
       const show = !win.isVisible();
       for (const w of allWindows()) { if (show) w.showInactive(); else w.hide(); }
     });
+
+    if (!globalShortcut.register('Control+Alt+W', toggleWallpaperMode)) {
+      console.warn('[hotkey] Control+Alt+W is already taken by another app');
+    }
 
     // Transport hotkeys — the only way to drive playback while the visualiser
     // is the wallpaper, since it sits below the desktop icon layer.

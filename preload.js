@@ -28,6 +28,9 @@ contextBridge.exposeInMainWorld('bhv', {
 
   setInteractive: (on) => ipcRenderer.send('interactive', on),
   reportSource: (src) => ipcRenderer.send('source', src),
+  // The bootstrap threw. In the passive modes the stack trace is painted on a
+  // window nobody can read, so main puts it in a dialog instead.
+  reportFatal: (msg) => ipcRenderer.send('fatal', msg),
   hide: () => ipcRenderer.send('hide'),
   toggleFullscreen: () => ipcRenderer.send('toggle-fullscreen'),
   // Only the first-run guide uses this; it shares this bridge rather than

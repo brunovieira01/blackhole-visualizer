@@ -21,6 +21,8 @@ const els = {
   fps: document.getElementById('hud-fps'),
 };
 
+const modeButtons = [...els.mode.querySelectorAll('button[data-mode]')];
+
 const np = {
   root: document.getElementById('np'),
   kicker: document.getElementById('np-kicker'),
@@ -430,7 +432,7 @@ function applySettings(s) {
   }
 
   els.theme.textContent = theme.label;
-  els.mode.textContent = mode;
+  for (const b of modeButtons) b.classList.toggle('on', b.dataset.mode === mode);
   const wi = WARP_STEPS.indexOf(settings.warp ?? 1.0);
   els.warp.textContent = wi >= 0 ? WARP_LABELS[wi] : String(settings.warp);
 }
@@ -512,6 +514,17 @@ function seekToFraction(frac) {
   clock.at = performance.now();
   clock.reported = null;      // force a real resync on the next reading
   tickProgress();
+}
+
+// The HUD's mode switch. Only ever reachable in window mode: overlay hides the
+// HUD, and as the wallpaper no real mouse event arrives at all. Switching mode
+// destroys this window and builds a new one, so there is nothing to clean up
+// here — main owns the transition.
+function bindModeSwitch() {
+  els.mode.addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-mode]');
+    if (btn) bridge?.set('mode', btn.dataset.mode);
+  });
 }
 
 function bindTransport() {
@@ -756,7 +769,11 @@ async function main() {
   if (mode === 'window') {
     bindInteraction();
     bindTransport();
-    showHud(true);
+    bindModeSwitch();
+    // Left up, not faded after four seconds. The HUD is the app's only visible
+    // control surface now — the mode switch lives in it — and a menu that
+    // disappears on its own before you have read it isn't one. `H` hides it.
+    showHud(false);
   } else if (mode === 'overlay') {
     bindTransport();
     bindOverlayHover();
@@ -855,6 +872,9 @@ async function main() {
 
 main().catch((err) => {
   console.error(err);
+  // Painted for window mode, where it can actually be read; main also puts it
+  // in a dialog, which is the only way it reaches anyone in the passive modes.
   document.body.innerHTML =
     `<pre style="color:#f96;font:13px/1.6 Consolas,monospace;padding:32px;white-space:pre-wrap">${err.stack || err}</pre>`;
+  bridge?.reportFatal(String(err.message || err));
 });

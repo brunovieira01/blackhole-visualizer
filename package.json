@@ -11,6 +11,8 @@
     "overlay": "electron . --mode=overlay",
     "window": "electron . --mode=window",
     "shot": "electron . --mode=window --shot",
+    "dist": "electron-builder --win",
+    "pack": "electron-builder --win --dir",
     "test": "node tools/test-shaders.mjs && node tools/test-analysis.mjs && node tools/test-capture.mjs",
     "test:lyrics": "node tools/test-lyrics.mjs",
     "probe-desktop": "electron tools/probe-desktop.js",
@@ -18,7 +20,8 @@
     "probe-gpu": "electron tools/probe-gpu.js"
   },
   "devDependencies": {
-    "electron": "^43.2.0"
+    "electron": "^43.2.0",
+    "electron-builder": "^26.15.3"
   },
   "optionalDependencies": {
     "koffi": "^3.1.2"

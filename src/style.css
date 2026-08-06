@@ -550,6 +550,49 @@ body:not(.np-active) .hud { top: 22px; }
 
 .hud-row .v { color: rgba(255, 224, 190, 0.92); }
 
+/* ---- HUD mode switch ----------------------------------------------------
+   The HUD is `pointer-events: none` as a whole so it never eats a camera
+   drag; only the switch opts back in, and only in window mode — in overlay
+   the HUD is hidden, and as the wallpaper no real mouse event arrives at all.
+   Both those cases are already covered by `body.passive .hud { display:none }`,
+   so the guard here is just `body.can-click`. */
+.hud-seg {
+  display: flex;
+  gap: 4px;
+  margin: 1px 0 2px;
+}
+
+.hud-seg button {
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  color: rgba(255, 236, 214, 0.42);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 2px;
+  padding: 0 6px;
+  line-height: 1.6;
+  pointer-events: none;
+}
+
+body.can-click .hud-seg button { pointer-events: auto; cursor: pointer; }
+
+body.can-click .hud-seg button:hover {
+  color: rgba(255, 236, 214, 0.95);
+  border-color: rgba(var(--accent), 0.4);
+}
+
+.hud-seg button.on {
+  color: rgba(var(--accent), 0.98);
+  border-color: rgba(var(--accent), 0.55);
+  background: rgba(var(--accent), 0.11);
+}
+
+.hud-seg button:focus-visible {
+  outline: 1px solid rgba(var(--accent), 0.8);
+  outline-offset: 1px;
+}
+
 .hud-keys {
   margin-top: 10px;
   padding-top: 9px;

@@ -78,6 +78,11 @@
     text-align: center;
   }
 
+  code {
+    font: 12.5px/1.4 ui-monospace, "Cascadia Mono", Consolas, monospace;
+    color: var(--text);
+  }
+
   .note {
     margin: 20px 0 0;
     padding: 14px 16px;
@@ -130,6 +135,9 @@
 
     <h2>Anywhere in Windows</h2>
     <table>
+      <tr><td class="key"><kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>W</kbd></td>
+          <td class="what"><b>Wallpaper on and off.</b> The way back out of wallpaper mode,
+              which is the one mode with nothing on screen to click</td></tr>
       <tr><td class="key"><kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>B</kbd></td>
           <td class="what">Show or hide the visualiser</td></tr>
       <tr><td class="key">Double-click tray</td>
@@ -165,21 +173,50 @@
     </table>
 
     <h2>The three modes</h2>
+    <p class="sub">
+      Switch between them from the <b>mode</b> row in the HUD, top-left of the window —
+      or from the tray menu, or with <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>W</kbd>.
+    </p>
     <table>
+      <tr><td class="key">Window</td>
+          <td class="what">The default. An ordinary window, with the HUD.</td></tr>
       <tr><td class="key">Wallpaper</td>
-          <td class="what">The default. Becomes your literal desktop background; icons stay
-              on top and keep working, and it never appears in Alt+Tab.</td></tr>
+          <td class="what">Becomes your literal desktop background; icons stay on top and
+              keep working, and it never appears in Alt+Tab. Nothing on screen can be
+              clicked down there, so <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>W</kbd> and the
+              tray are how you come back.</td></tr>
       <tr><td class="key">Overlay</td>
           <td class="what">Fullscreen and click-through — only the glow is drawn, the rest
               of your screen shows through.</td></tr>
-      <tr><td class="key">Window</td>
-          <td class="what">An ordinary window, with the HUD. The easiest one to start with.</td></tr>
     </table>
+
+    <h2>What this touches on your PC</h2>
+    <p class="sub">
+      Short list, and it is the whole list. No registry keys, no system settings, no files
+      outside the two places below.
+    </p>
+    <table>
+      <tr><td class="key">Its settings</td>
+          <td class="what">One <code>config.json</code> in this app's own folder under
+              <code>%APPDATA%</code>. Nothing else is written anywhere.</td></tr>
+      <tr><td class="key">Start with Windows</td>
+          <td class="what">Off unless you turn it on. It is a shortcut in your Startup
+              folder — no service, no scheduled task.</td></tr>
+      <tr><td class="key">Desktop icons</td>
+          <td class="what">Only the orbit launcher hides them, only if you say yes when
+              asked, and they come back when the app quits. It is the same switch as
+              right-click desktop → View → Show desktop icons.</td></tr>
+    </table>
+    <p class="sub" style="margin-top:12px">
+      All of it is undone in one go from the tray: <b>Undo changes to this PC</b>.
+      Uninstalling removes the settings too.
+    </p>
 
     <p class="note">
       <b>It listens to your speakers, not your microphone.</b> Audio comes from WASAPI
       loopback, which captures what is already being played and never opens an input
-      device. Nothing is recorded and nothing leaves your machine.
+      device. Nothing is recorded and nothing leaves your machine — the one thing that
+      goes out is a lyrics lookup, by song title, when lyrics are switched on.
     </p>
   </main>
 

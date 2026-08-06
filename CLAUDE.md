@@ -1,7 +1,8 @@
 # CLAUDE.md — Black Hole Visualizer
 
-Electron app: a ray-marched black hole that reacts to system audio, running as a live
-Windows desktop wallpaper. Windows-only. No build step, no bundler.
+Electron app: a ray-marched black hole that reacts to system audio, which can run as a
+live Windows desktop wallpaper. Windows-only. No bundler, and no build step to *run* it —
+`npm run dist` packages it, but nothing in the source tree is generated.
 
 ## Run it
 
@@ -12,6 +13,29 @@ npm run wallpaper                              # desktop wallpaper mode
 npx electron . --demo-audio                    # synthetic beat, skips audio capture
 npx electron . --mode=window --shot=out.png    # render one frame to PNG, then exit
 ```
+
+## Package it
+
+```powershell
+npm run dist    # dist\Black Hole Visualizer <version> Setup.exe + a .zip
+npm run pack    # dist\win-unpacked only — much faster, use this to test packaging
+```
+
+Config is `electron-builder.yml` plus `build/installer.nsh`. The installer is per-user
+(`%LOCALAPPDATA%\Programs`, no elevation) and the NSIS script refuses to install on
+32-bit or pre-Win10, warns below build 17763, and removes the Startup shortcut and
+`%APPDATA%\blackhole-visualizer` on uninstall.
+
+**Test packaging against a throwaway profile**, or the packaged build will read and write
+the same config as your dev runs and you won't see the first-run path at all:
+
+```powershell
+dist\win-unpacked\"Black Hole Visualizer.exe" --user-data-dir=$env:TEMP\bhv-fresh
+```
+
+The two things worth checking after any packaging change are that a `powershell.exe`
+child appears (that's `nowplaying.ps1` running from `app.asar.unpacked`) and that the log
+says `[wallpaper] embedded into desktop layer` (that's koffi loading from there).
 
 `--shot` is the fastest way to check a visual change without a human looking at the
 screen: it waits 4s for the audio and shaders to settle, calls `capturePage()`, writes
@@ -55,6 +79,8 @@ foreground, so the keystrokes land in whatever app is actually in front.
 | `main.js` | Modes, tray menu, config persistence, loopback plumbing, autostart |
 | `preload.js` | contextBridge IPC surface (`window.bhv`) |
 | `src/welcome.html` | First-run guide to the controls; self-contained, own styles |
+| `electron-builder.yml` | Packaging: file list, asar unpacking, per-user NSIS installer |
+| `build/installer.nsh` | NSIS preflight (arch, Windows build) + uninstall cleanup |
 | `native/wallpaper.js` | `SetParent` into Explorer's WorkerW via koffi |
 | `native/desktop.js` | Desktop icon show/hide + global pointer sampling (koffi) |
 | `lib/desktop-items.js` | Reads the Desktop, resolves shortcut target icons |
@@ -111,12 +137,45 @@ window flags like `transparent` and `focusable` can't be changed after creation.
   nothing in memory that remembers why; `recoverDesktopIcons()` adopts that at boot so
   the normal path restores them. `restoreDesktopIcons()` runs from both `will-quit` and
   `uncaughtException`. If you add another exit path, add it there too.
-- **`orbitLauncher` defaults to `false`.** A fresh clone must never empty someone's
-  desktop unannounced.
-- **The first-run guide is a real window, not an overlay.** The default mode is wallpaper
-  and a wallpaper window can never be clicked, so the one screen that must be dismissible
-  is the one that cannot depend on pointer forwarding. It is also the only thing here
-  allowed to take focus, and only once.
+- **`orbitLauncher` defaults to `false`, and hiding the icons needs an explicit yes.**
+  `applyDesktopIcons()` bails to `askHideIcons()` unless `agreedHideIcons` is set. This is
+  the only thing the app changes about Windows itself, so it does not get to happen as a
+  side effect of enabling something else. Answering no clears `orbitHideIcons` rather than
+  the launcher — the orbit is still worth having with the real icons left in place.
+- **Everything that outlives the process is undone by one menu item.** `undoLocalChanges()`
+  is the complete list: desktop icon visibility, the Startup shortcut, the config file.
+  Keeping that list short and true is a feature, not housekeeping — the README makes a
+  promise about it. If you add something persistent, add it there.
+- **`mode` defaults to `window`, deliberately, and there is no migration for it.** A first
+  launch that silently replaces someone's desktop background is a bad way to meet an app,
+  and it is the one mode with nothing on screen to click. Anyone who chose wallpaper has
+  it in their config already.
+- **`setMode()` is the only door into a mode change** — tray, HUD switch and the
+  `Ctrl+Alt+W` hotkey all go through it, so the one-time "here is how to get back" note
+  cannot be bypassed by whichever one you used.
+- **The HUD is a control surface now, not a readout.** Its `mode` row is three real
+  buttons, `.hud` stays `pointer-events: none` and only they opt back in, and window mode
+  no longer auto-hides it after four seconds. A menu that vanishes before you have read it
+  is not one.
+- **The first-run guide is a real window, not an overlay.** It is reopenable from the tray
+  at any time, including while the visualiser is the wallpaper — where an in-renderer
+  overlay could never be clicked or dismissed. It is also the only thing here allowed to
+  take focus, and only once.
+- **Packaged, `__dirname` is inside `app.asar`.** Electron patches `fs` so our own reads
+  work, but nothing else's do: `powershell.exe -File` cannot open the watcher script in
+  there, Explorer cannot draw a shortcut icon from it, and the loader cannot `dlopen` a
+  `.node`. Those three paths go through `realFile()` (rewrites `app.asar` →
+  `app.asar.unpacked`) and are listed under `asarUnpack` in `electron-builder.yml`. The
+  two must be kept in step; the symptom of forgetting is a feature that works perfectly
+  from source and silently does nothing once installed.
+- **Don't put `productName` in `package.json`.** It lives in `electron-builder.yml`
+  instead. Electron derives `app.getPath('userData')` from it when present, so adding it
+  would move every existing user's settings to a new folder and look like a wipe. The
+  uninstaller deletes `%APPDATA%\blackhole-visualizer` by that name for the same reason.
+- **A renderer bootstrap failure must reach the user.** `main().catch()` also calls
+  `bridge.reportFatal()`, because in wallpaper and overlay mode the stack trace it paints
+  is on a window nobody can read or click; main puts it in a dialog. The realistic cause
+  is no WebGL2.
 - **"First run" means there was no config file**, not `seenWelcome`. The flag alone would
   fire the guide at every existing user the first time they updated, since their config
   predates the key. `maybeShowWelcome()` also writes the flag when it *shows* the guide

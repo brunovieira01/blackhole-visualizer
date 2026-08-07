@@ -396,6 +396,8 @@ function createWindow(mode) {
   const oldWins = wins;
   attachedToDesktop = false;
   currentMode = mode;
+  // A fresh window set is on screen, whatever the old one was doing.
+  userHidden = false;
 
   const displays = displaysForMode();
   win = new BrowserWindow(windowOptions(mode, displays[0]));
@@ -423,6 +425,50 @@ function createWindow(mode) {
   applyDesktopIcons();
   startPointerForwarding();
   startCoveredWatch();
+}
+
+// ---------------------------------------------------------------------------
+//  Global shortcut actions
+// ---------------------------------------------------------------------------
+const hotkeysOk = [];
+const hotkeysFailed = [];
+
+// Whether the user has hidden the visualiser with Ctrl+Alt+B.
+//
+// Tracked here rather than read back from the window, which is what this used
+// to do (`const show = !win.isVisible()`). `isVisible()` is not a reliable
+// memory for a window that has been reparented into Explorer's WorkerW: it
+// answers on the native window's WS_VISIBLE and its ancestors', which is about
+// the state of the *desktop* as much as ours. When it answered "visible" for a
+// window we had just hidden, the next press hid it again — so the key looked
+// dead for a few presses and then, when the reading happened to flip, worked.
+// A boolean we own cannot disagree with itself.
+let userHidden = false;
+
+function toggleVisible() {
+  if (!win || win.isDestroyed()) {
+    userHidden = false;
+    return createWindow(startupMode());
+  }
+  userHidden = !userHidden;
+  for (const w of allWindows()) {
+    if (userHidden) w.hide();
+    else w.showInactive();
+  }
+  // Logged on purpose. A global shortcut that another process swallows is
+  // indistinguishable from a bug in here, and this line is how you tell the
+  // difference: if pressing the key prints nothing, the press never arrived.
+  console.log('[hotkey] visualiser ' + (userHidden ? 'hidden' : 'shown'));
+  buildTray();
+}
+
+// The renderer's `O` key only exists in window mode: as the wallpaper the
+// window is never focused and sits below Explorer's icon layer, so no key
+// event can reach it. The launcher is the one thing you actually want to turn
+// off from there, so it gets a global shortcut of its own.
+function toggleOrbitLauncher() {
+  setConfig({ orbitLauncher: !config.orbitLauncher });
+  console.log('[hotkey] orbit launcher ' + (config.orbitLauncher ? 'on' : 'off'));
 }
 
 // The single door into a mode change — tray, HUD switch and hotkey all come
@@ -1165,6 +1211,7 @@ function buildTray() {
         {
           label: 'Put desktop shortcuts in orbit',
           type: 'checkbox',
+          accelerator: 'Ctrl+Alt+O',
           checked: config.orbitLauncher,
           click: (i) => setConfig({ orbitLauncher: i.checked }),
         },
@@ -1237,10 +1284,29 @@ function buildTray() {
       checked: config.launchAtLogin,
       click: (i) => setConfig({ launchAtLogin: setAutoStart(i.checked) }),
     },
+    // Every hotkey action also needs a route that cannot be intercepted. A
+    // global shortcut belongs to whichever app registered it first, and if
+    // something else on the machine owns Ctrl+Alt+B there is otherwise no way
+    // at all to hide the visualiser.
+    {
+      label: userHidden ? 'Show the visualizer' : 'Hide the visualizer',
+      accelerator: 'Ctrl+Alt+B',
+      click: toggleVisible,
+    },
     { label: 'Restart visualizer', click: () => createWindow(startupMode()) },
     { label: 'Controls and shortcuts', click: () => showWelcome() },
     { label: 'Open config folder', click: () => shell.showItemInFolder(configPath) },
     { label: 'Undo changes to this PC…', click: undoLocalChanges },
+    // A hotkey another app got to first does nothing at all, with no way to
+    // tell that from a bug in here. Say so rather than letting someone press
+    // a dead key and conclude the app is broken.
+    ...(hotkeysFailed.length ? [
+      { type: 'separator' },
+      {
+        label: `⚠ ${hotkeysFailed.join(', ')} taken by another app`,
+        enabled: false,
+      },
+    ] : []),
     { type: 'separator' },
     { label: 'Quit', click: () => { quitting = true; app.quit(); } },
   ]));
@@ -1630,27 +1696,25 @@ if (!app.requestSingleInstanceLock()) {
       if (expected !== actual) createWindow(currentMode);
     }, 3000);
 
-    globalShortcut.register('Control+Alt+B', () => {
-      if (!win || win.isDestroyed()) return createWindow(config.mode);
-      const show = !win.isVisible();
-      for (const w of allWindows()) { if (show) w.showInactive(); else w.hide(); }
-    });
-
-    if (!globalShortcut.register('Control+Alt+W', toggleWallpaperMode)) {
-      console.warn('[hotkey] Control+Alt+W is already taken by another app');
-    }
-
-    // Transport hotkeys — the only way to drive playback while the visualiser
-    // is the wallpaper, since it sits below the desktop icon layer.
-    for (const [accel, cmd] of [
-      ['Control+Alt+Right', 'next'],
-      ['Control+Alt+Left', 'prev'],
-      ['Control+Alt+Space', 'playpause'],
+    // Every global shortcut in one table, and every registration checked. A
+    // failure here is silent and total — the key simply does nothing forever —
+    // and it is not rare: Ctrl+Alt+<letter> is popular, and whichever app asks
+    // Windows first owns it for the whole session.
+    for (const [accel, fn] of [
+      ['Control+Alt+B', toggleVisible],
+      ['Control+Alt+W', toggleWallpaperMode],
+      ['Control+Alt+O', toggleOrbitLauncher],
+      ['Control+Alt+Right', () => mediaCommand('next')],
+      ['Control+Alt+Left', () => mediaCommand('prev')],
+      ['Control+Alt+Space', () => mediaCommand('playpause')],
     ]) {
-      if (!globalShortcut.register(accel, () => mediaCommand(cmd))) {
+      if (globalShortcut.register(accel, fn)) hotkeysOk.push(accel);
+      else {
+        hotkeysFailed.push(accel);
         console.warn(`[hotkey] ${accel} is already taken by another app`);
       }
     }
+    console.log('[hotkey] registered: ' + (hotkeysOk.join(' ') || 'none'));
   });
 
   // The tray keeps the app alive; closing the window shouldn't quit it.

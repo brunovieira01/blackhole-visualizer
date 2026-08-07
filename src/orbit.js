@@ -157,10 +157,14 @@ export class OrbitLauncher {
       this.paused = false;
       return;
     }
-    // Holding the orbit still while the cursor is on the desktop is what makes
-    // this clickable at all — you can't reliably hit a moving target.
-    this.paused = true;
     this.hover = this._hitTest(p.x, p.y);
+    // Only a body directly under the cursor holds the ring, and only while it
+    // is there. This used to freeze on the cursor being anywhere on the
+    // desktop at all, which is almost always — so in practice the orbit didn't
+    // orbit. Motion is the default state; the pause is a brief exception that
+    // exists so a body can be clicked without sliding out from under you
+    // between mousedown and mouseup.
+    this.paused = this.hover >= 0;
   }
 
   click(p, button = 'left') {

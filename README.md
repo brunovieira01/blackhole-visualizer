@@ -526,14 +526,21 @@ your GPU on a still image all day.
 
 Themes: Gargantua, Cygnus X-1, Nova, Emerald, Ember, Monochrome.
 
-Three shortcuts work **anywhere in Windows**, not just when the window has focus, because
-in wallpaper mode nothing on screen can be clicked:
+Those are ordinary key presses and need the window in front of you. **In wallpaper mode
+none of them work** — there is no window to focus, it sits below the desktop. These work
+anywhere in Windows instead:
 
 | Key | |
 |---|---|
 | `Ctrl` `Alt` `W` | Wallpaper on / off |
 | `Ctrl` `Alt` `B` | Show / hide the visualiser |
+| `Ctrl` `Alt` `O` | Orbit launcher on / off |
 | `Ctrl` `Alt` `←` `→` `space` | Previous / next / play-pause |
+
+If one of them does nothing at all, another app has claimed it — Windows gives a shortcut
+to whichever program registered it first, and the loser gets no error. The tray menu
+lists any that were taken, and every one of these has an equivalent in the tray that
+can't be intercepted.
 
 ---
 

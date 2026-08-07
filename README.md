@@ -17,15 +17,17 @@ bodies.
 
 ## Install
 
-Grab **`Black Hole Visualizer <version> Setup.exe`** from the
-[releases page](https://github.com/brunovieira01/blackhole-visualizer/releases) and run
-it. Nothing else is needed — no Node, no npm, no build step; Electron and every
+**[Download the installer](https://github.com/brunovieira01/blackhole-visualizer/releases/latest)**
+and run it. Nothing else is needed — no Node, no npm, no build step; Electron and every
 dependency are inside.
 
 The installer is **per-user**: it goes into `%LOCALAPPDATA%\Programs`, asks for no
 administrator prompt, and touches nothing outside your own account. There is also a
 **`.zip`** on the same page if you would rather install nothing at all — unzip it
 anywhere and run the `.exe` inside.
+
+Windows 10 version 1809 (build 17763) or newer, 64-bit. The installer checks and says so
+if not.
 
 > Windows will show a blue **"Windows protected your PC"** box the first time, because
 > the installer isn't code-signed (a certificate costs a few hundred a year). Click
